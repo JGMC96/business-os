@@ -194,3 +194,8 @@ export interface BusinessWithMembership extends Business {
 export interface BusinessModuleWithKey extends BusinessModule {
   module_key: ModuleKey;
 }
+
+// Invoice with joined client name for display
+export interface InvoiceWithClient extends Invoice {
+  client_name?: string;
+}
