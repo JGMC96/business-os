@@ -1,317 +1,255 @@
 
-# Plan: Modulo de Productos (MVP)
+# Plan: Navegación Inteligente en Sidebar
 
 ## Resumen
 
-Implementacion del modulo de Productos siguiendo exactamente el patron establecido por el modulo de Clientes: hook con proteccion de race conditions via requestIdRef, busqueda sanitizada, soft delete, y feature gating con RequireModule.
+Actualizar el DashboardSidebar para mostrar navegación con feature gating: items de módulos habilitados son navegables, módulos no habilitados aparecen bloqueados con candado y CTA de "Mejorar plan".
 
 ---
 
-## Estado Actual Verificado
+## Estado Actual
 
-### Base de Datos
-- **Tabla `products`**: Existe con campos: id, business_id, name, description, price, unit, category, is_active, created_by, created_at, updated_at
-- **Indices actuales**: `products_pkey` (id), `idx_products_business` (business_id)
-- **Extension `pg_trgm`**: Ya activada (v1.6)
-- **Indices faltantes**: trigram para name/category, compuesto (business_id, is_active)
+### Sidebar actual
+- Menu items definidos estáticamente sin `moduleKey`
+- Todos los items son Links navegables (incluso módulos no implementados)
+- Business selector muestra datos hardcodeados ("Mi Negocio", "Plan Pro")
 
-### Frontend
-- **Patron establecido**: useClients con requestIdRef, sanitizeSearchTerm, normalizeData
-- **Componentes existentes**: ClientsHeader, ClientsTable, ClientFormDialog
-- **Tipo Product**: Ya definido en types/database.ts
+### Recursos disponibles
+- `useBusiness()` provee `enabledModules`, `activeBusiness`
+- `ModuleKey`: `'clients' | 'products' | 'invoicing' | 'payments' | 'ai_advisor' | 'reports'`
+- Icono `Lock` de lucide-react para items bloqueados
 
 ---
 
-## Arquitectura del Modulo
+## Arquitectura de la Solución
 
 ```text
-/dashboard/products
+menuItems[]
     |
-    +-- Products.tsx (contenedor principal)
+    +-- { icon, label, path }                    → Siempre visible (Dashboard, Settings)
+    +-- { icon, label, path, moduleKey }         → Requiere módulo habilitado
          |
-         +-- ProductsHeader.tsx (titulo, busqueda debounced, filtros)
-         +-- ProductsTable.tsx (listado con acciones)
-         +-- ProductFormDialog.tsx (modal crear/editar)
-         |
-         +-- useProducts.ts (hook CRUD)
+         +-- moduleKey in enabledModules? → Link normal
+         +-- moduleKey NOT in enabledModules? → Item bloqueado + Lock + tooltip
 ```
 
 ---
 
-## Fase 1: Base de Datos
+## Cambios en DashboardSidebar.tsx
 
-### 1.1 Indices Optimizados para Productos
+### 1. Importar contexto y agregar Lock icon
 
-```sql
--- Indice compuesto para filtrado por estado
-CREATE INDEX IF NOT EXISTS idx_products_business_active 
-ON public.products(business_id, is_active);
-
--- Indices GIN para busqueda fuzzy con trigram
-CREATE INDEX IF NOT EXISTS idx_products_name_trgm
-ON public.products USING gin (name gin_trgm_ops);
-
-CREATE INDEX IF NOT EXISTS idx_products_category_trgm
-ON public.products USING gin (category gin_trgm_ops);
+```typescript
+import { useBusiness } from "@/contexts/BusinessContext";
+import { Lock } from "lucide-react";
+import type { ModuleKey } from "@/types/database";
 ```
 
-Nota: pg_trgm ya esta activo, no necesita activarse.
+### 2. Actualizar estructura de menuItems
+
+```typescript
+interface MenuItem {
+  icon: LucideIcon;
+  label: string;
+  path: string;
+  moduleKey?: ModuleKey; // undefined = siempre visible
+}
+
+const menuItems: MenuItem[] = [
+  { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
+  { icon: Users, label: "Clientes", path: "/dashboard/clients", moduleKey: "clients" },
+  { icon: Package, label: "Productos", path: "/dashboard/products", moduleKey: "products" },
+  { icon: FileText, label: "Facturas", path: "/dashboard/invoices", moduleKey: "invoicing" },
+  { icon: CreditCard, label: "Pagos", path: "/dashboard/payments", moduleKey: "payments" },
+  { icon: MessageSquare, label: "Asesor IA", path: "/dashboard/ai", moduleKey: "ai_advisor" },
+];
+```
+
+### 3. Lógica de renderizado condicional
+
+```typescript
+const { enabledModules, activeBusiness } = useBusiness();
+
+// Para cada item:
+const isModuleEnabled = !item.moduleKey || enabledModules.includes(item.moduleKey);
+const isLocked = item.moduleKey && !isModuleEnabled;
+```
+
+### 4. Renderizado de items
+
+**Módulo habilitado:** Link normal con hover y active states
+
+**Módulo bloqueado:**
+- `div` en lugar de `Link` (no navegable)
+- Opacidad reducida (opacity-50)
+- Cursor not-allowed
+- Icono de Lock pequeño junto al label
+- Tooltip con "Mejorar plan" (cuando sidebar está expandido)
+
+```tsx
+{isLocked ? (
+  <div
+    className={cn(
+      "flex items-center gap-3 px-3 py-2.5 rounded-xl",
+      "text-sidebar-foreground/40 cursor-not-allowed",
+      !isOpen && "justify-center"
+    )}
+    title="Mejorar plan para acceder"
+  >
+    <item.icon className="w-5 h-5 flex-shrink-0" />
+    {isOpen && (
+      <div className="flex items-center gap-2 flex-1">
+        <span className="text-sm font-medium">{item.label}</span>
+        <Lock className="w-3.5 h-3.5 text-sidebar-foreground/40" />
+      </div>
+    )}
+  </div>
+) : (
+  <Link ... /> // Código actual
+)}
+```
+
+### 5. Business selector con datos reales
+
+Actualmente hardcodeado, cambiar a:
+
+```tsx
+{isOpen && (
+  <div className="flex-1 text-left">
+    <p className="text-sm font-medium truncate">
+      {activeBusiness?.name || "Sin negocio"}
+    </p>
+    <p className="text-xs text-sidebar-foreground/60">
+      {/* TODO: Mostrar plan cuando tengamos subscription */}
+      Negocio activo
+    </p>
+  </div>
+)}
+```
 
 ---
 
-## Fase 2: Hook de Productos
+## UI States
 
-### Archivo: `src/hooks/useProducts.ts`
-
-**Estructura identica a useClients:**
-
-```typescript
-interface ProductFormData {
-  name: string;
-  description?: string;
-  price: number;
-  unit?: string;
-  category?: string;
-}
-
-interface UseProductsReturn {
-  products: Product[];
-  isLoading: boolean;
-  error: Error | null;
-  searchTerm: string;
-  setSearchTerm: (term: string) => void;
-  showInactive: boolean;
-  setShowInactive: (show: boolean) => void;
-  fetchProducts: () => Promise<void>;
-  createProduct: (data: ProductFormData) => Promise<boolean>;
-  updateProduct: (id: string, data: ProductFormData) => Promise<boolean>;
-  toggleProductStatus: (id: string, currentStatus: boolean) => Promise<boolean>;
-  // NO deleteProduct - solo soft delete via toggleProductStatus
-}
-```
-
-**Caracteristicas clave:**
-
-1. **requestIdRef**: Contador incremental para ignorar respuestas viejas
-2. **runFetch(requestId)**: Funcion unica de fetch, usada por effect y fetchProducts
-3. **sanitizeSearchTerm**: Reutiliza la misma logica que clients (reemplaza , () ; por espacios)
-4. **normalizeProductData**: trim en strings, asegura price es number
-5. **Query de busqueda**: `.or('name.ilike.%term%,category.ilike.%term%')`
-
-**Normalizacion de datos:**
-```typescript
-function normalizeProductData(data: ProductFormData): ProductFormData {
-  return {
-    name: data.name.trim(),
-    description: data.description?.trim() || undefined,
-    price: Number(data.price),
-    unit: data.unit?.trim() || undefined,
-    category: data.category?.trim() || undefined,
-  };
-}
-```
+| Estado | Apariencia |
+|--------|------------|
+| Habilitado + inactivo | Opacidad normal, hover bg |
+| Habilitado + activo | Fondo primario, texto contraste |
+| Bloqueado | Opacidad 40%, candado, no clickeable |
+| Sidebar colapsado + bloqueado | Solo icono con opacidad reducida |
 
 ---
 
-## Fase 3: Componentes
+## Detalles Técnicos
 
-### 3.1 ProductsHeader.tsx
+### Colores y estilos
 
-**Props:**
-- searchTerm, onSearchChange
-- showInactive, onShowInactiveChange
-- onNewProduct
-
-**UI:**
-- Titulo "Productos" con descripcion
-- Input de busqueda con debounce 300ms (identico a ClientsHeader)
-- Switch "Mostrar inactivos"
-- Boton "Nuevo producto"
-
-### 3.2 ProductsTable.tsx
-
-**Columnas:**
-| Columna | Contenido |
-|---------|-----------|
-| Nombre | name |
-| Categoria | category (o "-") |
-| Precio | price formateado con currency |
-| Unidad | unit (o "-") |
-| Estado | Badge Activo/Inactivo |
-| Acciones | Menu dropdown |
-
-**Acciones (NO incluye Eliminar):**
-- Editar
-- Desactivar (si activo)
-- Reactivar (si inactivo)
-
-**Estados UI:**
-- Loading: 5 skeleton rows
-- Vacio: Ilustracion con icono Package + CTA
-- Sin resultados: Mensaje claro
-
-**Formateo de precio:**
 ```typescript
-// Usar Intl.NumberFormat para moneda
-const formatPrice = (price: number) => {
-  return new Intl.NumberFormat('es-MX', {
-    style: 'currency',
-    currency: 'MXN',
-  }).format(price);
+// Item bloqueado
+"text-sidebar-foreground/40 cursor-not-allowed"
+
+// Candado
+"w-3.5 h-3.5 text-sidebar-foreground/40"
+```
+
+### Tooltip para bloqueados (opcional MVP+)
+
+Usar `title` attribute como MVP:
+```tsx
+title="Mejorar plan para acceder"
+```
+
+En el futuro, podría usarse el componente Tooltip de shadcn para mejor UX.
+
+---
+
+## Archivos a Modificar
+
+| Archivo | Cambios |
+|---------|---------|
+| `src/components/dashboard/DashboardSidebar.tsx` | Agregar moduleKey a items, lógica de bloqueo, datos reales del negocio |
+
+---
+
+## Código Final Esperado (Estructura)
+
+```tsx
+export const DashboardSidebar = ({ isOpen, onToggle }: DashboardSidebarProps) => {
+  const location = useLocation();
+  const { enabledModules, activeBusiness } = useBusiness();
+
+  return (
+    <motion.aside ...>
+      {/* Logo section - sin cambios */}
+      
+      {/* Business selector - con datos reales */}
+      <div className="p-4 border-b border-sidebar-border">
+        <button ...>
+          ...
+          {isOpen && (
+            <div className="flex-1 text-left">
+              <p className="text-sm font-medium truncate">
+                {activeBusiness?.name || "Sin negocio"}
+              </p>
+              <p className="text-xs text-sidebar-foreground/60">
+                Negocio activo
+              </p>
+            </div>
+          )}
+        </button>
+      </div>
+
+      {/* Navigation - con gating */}
+      <nav ...>
+        {menuItems.map((item) => {
+          const isActive = location.pathname === item.path;
+          const isModuleEnabled = !item.moduleKey || enabledModules.includes(item.moduleKey);
+
+          if (!isModuleEnabled) {
+            return (
+              <div key={item.path} className="... locked styles" title="Mejorar plan">
+                <item.icon />
+                {isOpen && (
+                  <div className="flex items-center gap-2 flex-1">
+                    <span>{item.label}</span>
+                    <Lock className="w-3.5 h-3.5" />
+                  </div>
+                )}
+              </div>
+            );
+          }
+
+          return (
+            <Link key={item.path} ...>
+              // Código actual para items habilitados
+            </Link>
+          );
+        })}
+      </nav>
+
+      {/* Settings & collapse - sin cambios */}
+    </motion.aside>
+  );
 };
 ```
 
-### 3.3 ProductFormDialog.tsx
-
-**Campos con validacion Zod:**
-
-| Campo | Tipo | Requerido | Validacion |
-|-------|------|-----------|------------|
-| name | text | Si | min 2 caracteres |
-| price | number | Si | >= 0 |
-| category | text | No | trim |
-| unit | text | No | trim |
-| description | textarea | No | trim |
-
-**Schema Zod:**
-```typescript
-const productSchema = z.object({
-  name: z.string()
-    .min(1, 'El nombre es requerido')
-    .min(2, 'El nombre debe tener al menos 2 caracteres'),
-  price: z.coerce.number()
-    .min(0, 'El precio debe ser mayor o igual a 0'),
-  category: z.string().optional(),
-  unit: z.string().optional(),
-  description: z.string().optional(),
-});
-```
-
 ---
 
-## Fase 4: Pagina Principal
+## Checklist de Validación
 
-### Archivo: `src/pages/dashboard/Products.tsx`
-
-**Estructura identica a Clients.tsx:**
-
-```tsx
-export default function Products() {
-  const {
-    products,
-    isLoading,
-    searchTerm,
-    setSearchTerm,
-    showInactive,
-    setShowInactive,
-    createProduct,
-    updateProduct,
-    toggleProductStatus,
-  } = useProducts();
-
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // Handlers identicos al patron de Clients...
-
-  return (
-    <RequireModule module="products">
-      <div className="space-y-6">
-        <ProductsHeader ... />
-        <ProductsTable ... />
-        <ProductFormDialog ... />
-      </div>
-    </RequireModule>
-  );
-}
-```
-
----
-
-## Fase 5: Routing
-
-### Modificar Dashboard.tsx
-
-Agregar import y ruta:
-
-```tsx
-import Products from "@/pages/dashboard/Products";
-
-// En Routes:
-<Route path="products/*" element={<Products />} />
-```
-
----
-
-## Archivos a Crear/Modificar
-
-### Nuevos archivos
-
-| Archivo | Descripcion |
-|---------|-------------|
-| `src/hooks/useProducts.ts` | Hook CRUD con requestIdRef |
-| `src/pages/dashboard/Products.tsx` | Pagina principal modulo |
-| `src/components/products/ProductsHeader.tsx` | Header con busqueda debounced |
-| `src/components/products/ProductsTable.tsx` | Tabla sin delete |
-| `src/components/products/ProductFormDialog.tsx` | Modal con validacion Zod |
-| `supabase/migrations/XXXX_products_indexes.sql` | Indices trigram y compuesto |
-
-### Archivos a modificar
-
-| Archivo | Cambio |
-|---------|--------|
-| `src/pages/Dashboard.tsx` | Agregar ruta /products |
-
----
-
-## UX y Toasts
-
-| Accion | Exito | Error |
-|--------|-------|-------|
-| Crear | "Producto creado" | "Error al crear producto" |
-| Editar | "Producto actualizado" | "Error al actualizar" |
-| Desactivar | "Producto desactivado" | "Error al desactivar" |
-| Reactivar | "Producto reactivado" | "Error al reactivar" |
-
----
-
-## Seguridad Implementada
-
-1. **Multi-tenant**: Todas las queries con `business_id = activeBusinessId`
-2. **RLS**: Base de datos valida membresia via `is_member_of_business()`
-3. **Feature gating**: `RequireModule module="products"` bloquea acceso
-4. **Race condition**: requestIdRef previene estados inconsistentes
-5. **Sin delete real**: Solo soft delete via `toggleProductStatus`
-6. **Validacion**: Zod valida inputs antes de enviar
-7. **created_by**: Asignado automaticamente desde `user.id`
-
----
-
-## Orden de Implementacion
-
-1. Migracion SQL (indices trigram y compuesto)
-2. Hook useProducts
-3. ProductFormDialog
-4. ProductsTable
-5. ProductsHeader
-6. Products.tsx (pagina)
-7. Actualizar Dashboard.tsx con ruta
-8. Testing manual
-
----
-
-## Checklist Post-Implementacion
+### Visual
+- [ ] Dashboard siempre visible (no tiene moduleKey)
+- [ ] Clientes/Productos muestran normal si están habilitados
+- [ ] Facturas/Pagos/Asesor IA aparecen bloqueados si no están habilitados
+- [ ] Items bloqueados tienen candado visible
+- [ ] Items bloqueados no son clickeables
 
 ### Funcional
-- [ ] Listado carga por negocio activo
-- [ ] No mezcla datos al cambiar de negocio (race condition)
-- [ ] Busqueda "contiene" funciona en name/category
-- [ ] Crear producto con validacion
-- [ ] Editar producto
-- [ ] Desactivar/reactivar respeta toggle "Mostrar inactivos"
-- [ ] No hay boton/funcion de eliminar permanente
+- [ ] Click en item habilitado navega correctamente
+- [ ] Click en item bloqueado no hace nada
+- [ ] Nombre del negocio se muestra correctamente
+- [ ] Cambio de negocio actualiza módulos habilitados
 
-### Seguridad
-- [ ] Queries incluyen .eq('business_id', activeBusinessId)
-- [ ] Sin modulo products → bloqueo correcto por RequireModule
+### Responsivo
+- [ ] Sidebar colapsado muestra iconos con opacidad correcta
+- [ ] No hay overflow de texto en nombres largos
