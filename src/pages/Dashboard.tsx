@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Routes, Route } from "react-router-dom";
 import { motion } from "framer-motion";
-import { MessageSquare, Settings } from "lucide-react";
+import { MessageSquare } from "lucide-react";
 import { useBusiness } from "@/contexts/BusinessContext";
 import { DashboardSidebar } from "@/components/dashboard/DashboardSidebar";
 import { DashboardHeader } from "@/components/dashboard/DashboardHeader";
@@ -10,15 +10,8 @@ import Clients from "@/pages/dashboard/Clients";
 import Products from "@/pages/dashboard/Products";
 import Invoices from "@/pages/dashboard/Invoices";
 import Payments from "@/pages/dashboard/Payments";
+import Settings from "@/pages/dashboard/Settings";
 import LockedModulePage from "@/pages/dashboard/LockedModulePage";
-
-const SettingsPlaceholder = () => (
-  <div className="flex flex-col items-center justify-center py-20">
-    <Settings className="w-16 h-16 text-muted-foreground mb-4" />
-    <h2 className="text-2xl font-bold mb-2">Configuración</h2>
-    <p className="text-muted-foreground">Próximamente disponible</p>
-  </div>
-);
 
 const Dashboard = () => {
   const { user, activeBusiness, signOut } = useBusiness();
@@ -50,7 +43,7 @@ const Dashboard = () => {
               <Route path="ai/*" element={
                 <LockedModulePage moduleName="Asesor IA" moduleKey="ai_advisor" icon={MessageSquare} />
               } />
-              <Route path="settings/*" element={<SettingsPlaceholder />} />
+              <Route path="settings/*" element={<Settings />} />
             </Routes>
           </motion.div>
         </main>
