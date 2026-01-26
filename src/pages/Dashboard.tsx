@@ -10,6 +10,7 @@ import Clients from "@/pages/dashboard/Clients";
 import Products from "@/pages/dashboard/Products";
 import Invoices from "@/pages/dashboard/Invoices";
 import Payments from "@/pages/dashboard/Payments";
+import Retail from "@/pages/dashboard/Retail";
 import Settings from "@/pages/dashboard/Settings";
 import LockedModulePage from "@/pages/dashboard/LockedModulePage";
 
@@ -40,6 +41,7 @@ const Dashboard = () => {
               <Route path="products/*" element={<Products />} />
               <Route path="invoices/*" element={<Invoices />} />
               <Route path="payments/*" element={<Payments />} />
+              <Route path="retail/*" element={<Retail />} />
               <Route path="ai/*" element={
                 <LockedModulePage moduleName="Asesor IA" moduleKey="ai_advisor" icon={MessageSquare} />
               } />
