@@ -1,0 +1,228 @@
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import { supabase } from '@/integrations/supabase/client';
+import { useBusiness } from '@/contexts/BusinessContext';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { toast } from 'sonner';
+import { Building2, Sparkles, ArrowRight, Loader2 } from 'lucide-react';
+import type { ModuleType } from '@/types/database';
+
+const INDUSTRIES = [
+  { value: 'retail', label: 'Comercio / Retail' },
+  { value: 'services', label: 'Servicios profesionales' },
+  { value: 'consulting', label: 'Consultoría' },
+  { value: 'technology', label: 'Tecnología' },
+  { value: 'healthcare', label: 'Salud' },
+  { value: 'education', label: 'Educación' },
+  { value: 'food', label: 'Alimentos y bebidas' },
+  { value: 'construction', label: 'Construcción' },
+  { value: 'manufacturing', label: 'Manufactura' },
+  { value: 'other', label: 'Otro' },
+];
+
+const DEFAULT_MODULES: ModuleType[] = ['clients', 'products', 'invoicing', 'payments'];
+
+export default function Onboarding() {
+  const navigate = useNavigate();
+  const { user, refreshBusinesses } = useBusiness();
+  const [isLoading, setIsLoading] = useState(false);
+  const [businessName, setBusinessName] = useState('');
+  const [industry, setIndustry] = useState('');
+
+  const generateSlug = (name: string) => {
+    return name
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!user) {
+      toast.error('Debes iniciar sesión');
+      navigate('/auth');
+      return;
+    }
+
+    if (!businessName.trim()) {
+      toast.error('El nombre del negocio es requerido');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      // 1. Create the business
+      const slug = generateSlug(businessName);
+      const { data: business, error: businessError } = await supabase
+        .from('businesses')
+        .insert({
+          name: businessName.trim(),
+          slug: slug,
+          industry: industry || null,
+        })
+        .select()
+        .single();
+
+      if (businessError) throw businessError;
+
+      // 2. Add user as owner
+      const { error: memberError } = await supabase
+        .from('business_members')
+        .insert({
+          business_id: business.id,
+          user_id: user.id,
+          role: 'owner',
+          is_active: true,
+          joined_at: new Date().toISOString(),
+        });
+
+      if (memberError) throw memberError;
+
+      // 3. Create trial subscription
+      const { error: subError } = await supabase
+        .from('subscriptions')
+        .insert({
+          business_id: business.id,
+          plan: 'trial',
+          status: 'trialing',
+        });
+
+      if (subError) throw subError;
+
+      // 4. Enable default modules
+      const moduleInserts = DEFAULT_MODULES.map((module) => ({
+        business_id: business.id,
+        module,
+        is_enabled: true,
+      }));
+
+      const { error: modulesError } = await supabase
+        .from('business_modules')
+        .insert(moduleInserts);
+
+      if (modulesError) throw modulesError;
+
+      // 5. Refresh context and navigate
+      await refreshBusinesses();
+      toast.success('¡Negocio creado exitosamente!');
+      navigate('/dashboard');
+    } catch (error: unknown) {
+      console.error('Error creating business:', error);
+      const message = error instanceof Error ? error.message : 'Error al crear el negocio';
+      toast.error(message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        className="w-full max-w-lg"
+      >
+        {/* Header */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 mb-4">
+            <Sparkles className="w-8 h-8 text-primary" />
+          </div>
+          <h1 className="text-3xl font-bold text-foreground mb-2">
+            ¡Bienvenido a TotalBusiness!
+          </h1>
+          <p className="text-muted-foreground">
+            Configura tu primer negocio para comenzar
+          </p>
+        </div>
+
+        {/* Form Card */}
+        <Card className="border-border/50 shadow-lg">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Building2 className="w-5 h-5 text-primary" />
+              Información del negocio
+            </CardTitle>
+            <CardDescription>
+              Esta información te ayudará a personalizar tu experiencia
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="space-y-2">
+                <Label htmlFor="businessName">Nombre del negocio *</Label>
+                <Input
+                  id="businessName"
+                  placeholder="Ej: Mi Empresa S.A. de C.V."
+                  value={businessName}
+                  onChange={(e) => setBusinessName(e.target.value)}
+                  disabled={isLoading}
+                  required
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="industry">Industria</Label>
+                <Select value={industry} onValueChange={setIndustry} disabled={isLoading}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecciona una industria" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {INDUSTRIES.map((ind) => (
+                      <SelectItem key={ind.value} value={ind.value}>
+                        {ind.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Trial info */}
+              <div className="bg-accent/50 rounded-lg p-4 border border-accent">
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                    <Sparkles className="w-4 h-4 text-primary" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-sm">Prueba gratuita de 14 días</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Acceso completo a clientes, productos, facturación y pagos. Sin tarjeta de crédito.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <Button 
+                type="submit" 
+                className="w-full" 
+                size="lg"
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Creando negocio...
+                  </>
+                ) : (
+                  <>
+                    Crear negocio
+                    <ArrowRight className="w-4 h-4 ml-2" />
+                  </>
+                )}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </motion.div>
+    </div>
+  );
+}
