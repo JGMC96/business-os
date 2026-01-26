@@ -19,13 +19,14 @@ const Auth = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (session) {
-        // Check if user has any businesses
+    // Helper function to check memberships and navigate
+    const checkMembershipsAndNavigate = (userId: string) => {
+      // Use setTimeout to avoid deadlocks in onAuthStateChange
+      setTimeout(async () => {
         const { data: memberships } = await supabase
           .from('business_members')
           .select('business_id')
-          .eq('user_id', session.user.id)
+          .eq('user_id', userId)
           .eq('is_active', true)
           .limit(1);
         
@@ -34,23 +35,20 @@ const Auth = () => {
         } else {
           navigate("/dashboard");
         }
+      }, 0);
+    };
+
+    // Set up auth state listener FIRST
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session?.user) {
+        checkMembershipsAndNavigate(session.user.id);
       }
     });
 
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (session) {
-        const { data: memberships } = await supabase
-          .from('business_members')
-          .select('business_id')
-          .eq('user_id', session.user.id)
-          .eq('is_active', true)
-          .limit(1);
-        
-        if (!memberships || memberships.length === 0) {
-          navigate("/onboarding");
-        } else {
-          navigate("/dashboard");
-        }
+    // THEN check for existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        checkMembershipsAndNavigate(session.user.id);
       }
     });
 
