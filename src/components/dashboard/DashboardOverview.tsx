@@ -8,13 +8,13 @@ import {
   CreditCard, 
   AlertCircle,
   ArrowUpRight,
-  DollarSign,
-  Loader2
+  DollarSign
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDashboardMetrics } from "@/hooks/useDashboardMetrics";
+import { useRecentActivity, formatRelativeTime, type ActivityEventType } from "@/hooks/useRecentActivity";
 
 const formatPrice = (amount: number): string => {
   return new Intl.NumberFormat('es-MX', {
@@ -31,15 +31,23 @@ const formatChange = (value: number, isPercentage: boolean = true): string => {
   return `${prefix}${value}`;
 };
 
-// Hardcoded recent activity for now - will be replaced with real data in future iteration
-const recentActivity = [
-  { type: "payment", title: "Pago recibido", description: "Ejemplo de actividad", amount: "+$450", time: "Recientemente" },
-  { type: "invoice", title: "Factura creada", description: "Ejemplo de factura", amount: "$890", time: "Recientemente" },
-];
+const getActivityIcon = (type: ActivityEventType) => {
+  switch (type) {
+    case 'payment':
+      return { icon: CreditCard, bgColor: 'bg-success/10', iconColor: 'text-success' };
+    case 'invoice':
+      return { icon: FileText, bgColor: 'bg-primary/10', iconColor: 'text-primary' };
+    case 'client':
+      return { icon: Users, bgColor: 'bg-accent/10', iconColor: 'text-accent' };
+    default:
+      return { icon: AlertCircle, bgColor: 'bg-warning/10', iconColor: 'text-warning' };
+  }
+};
 
 export const DashboardOverview = () => {
   const navigate = useNavigate();
   const metrics = useDashboardMetrics();
+  const { activities, isLoading: activitiesLoading } = useRecentActivity(10);
 
   const stats = [
     {
@@ -173,47 +181,66 @@ export const DashboardOverview = () => {
             <Button variant="ghost" size="sm" onClick={() => navigate('/dashboard/payments')}>Ver todo</Button>
           </CardHeader>
           <CardContent>
-            {recentActivity.length === 0 ? (
+            {activitiesLoading ? (
+              <div className="space-y-4">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="flex items-center justify-between py-3 border-b border-border last:border-0">
+                    <div className="flex items-center gap-4">
+                      <Skeleton className="w-10 h-10 rounded-xl" />
+                      <div>
+                        <Skeleton className="h-4 w-24 mb-2" />
+                        <Skeleton className="h-3 w-32" />
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <Skeleton className="h-4 w-16 mb-1" />
+                      <Skeleton className="h-3 w-12" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : activities.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
                 <p>No hay actividad reciente</p>
               </div>
             ) : (
               <div className="space-y-4">
-                {recentActivity.map((activity, index) => (
-                  <motion.div
-                    key={index}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ duration: 0.3, delay: 0.3 + index * 0.1 }}
-                    className="flex items-center justify-between py-3 border-b border-border last:border-0"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                        activity.type === "payment" ? "bg-success/10" :
-                        activity.type === "invoice" ? "bg-primary/10" :
-                        activity.type === "client" ? "bg-accent/10" :
-                        "bg-warning/10"
-                      }`}>
-                        {activity.type === "payment" ? <CreditCard className="w-5 h-5 text-success" /> :
-                         activity.type === "invoice" ? <FileText className="w-5 h-5 text-primary" /> :
-                         activity.type === "client" ? <Users className="w-5 h-5 text-accent" /> :
-                         <AlertCircle className="w-5 h-5 text-warning" />}
+                {activities.map((activity, index) => {
+                  const { icon: Icon, bgColor, iconColor } = getActivityIcon(activity.event_type);
+                  const isPayment = activity.event_type === 'payment';
+                  
+                  return (
+                    <motion.div
+                      key={activity.event_id}
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ duration: 0.3, delay: 0.3 + index * 0.05 }}
+                      className="flex items-center justify-between py-3 border-b border-border last:border-0"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${bgColor}`}>
+                          <Icon className={`w-5 h-5 ${iconColor}`} />
+                        </div>
+                        <div>
+                          <p className="font-medium text-foreground">{activity.title}</p>
+                          <p className="text-sm text-muted-foreground truncate max-w-[200px]">
+                            {activity.description}
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-medium text-foreground">{activity.title}</p>
-                        <p className="text-sm text-muted-foreground">{activity.description}</p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      {activity.amount && (
-                        <p className={`font-medium ${activity.amount.startsWith("+") ? "text-success" : "text-foreground"}`}>
-                          {activity.amount}
+                      <div className="text-right">
+                        {activity.amount !== null && (
+                          <p className={`font-medium ${isPayment ? "text-success" : "text-foreground"}`}>
+                            {isPayment ? '+' : ''}{formatPrice(activity.amount)}
+                          </p>
+                        )}
+                        <p className="text-xs text-muted-foreground">
+                          {formatRelativeTime(activity.created_at)}
                         </p>
-                      )}
-                      <p className="text-xs text-muted-foreground">{activity.time}</p>
-                    </div>
-                  </motion.div>
-                ))}
+                      </div>
+                    </motion.div>
+                  );
+                })}
               </div>
             )}
           </CardContent>

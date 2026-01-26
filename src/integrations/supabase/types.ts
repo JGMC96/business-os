@@ -717,6 +717,17 @@ export type Database = {
           prev_monthly_revenue: number
         }[]
       }
+      get_recent_activity: {
+        Args: { _business_id: string; _limit?: number }
+        Returns: {
+          amount: number
+          created_at: string
+          description: string
+          event_id: string
+          event_type: string
+          title: string
+        }[]
+      }
       get_user_role_in_business: {
         Args: { _business_id: string }
         Returns: Database["public"]["Enums"]["app_role"]
