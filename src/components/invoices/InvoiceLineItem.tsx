@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { Control, useWatch, useFormContext } from 'react-hook-form';
 import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
