@@ -1,445 +1,560 @@
 
-# Plan de Implementacion: TotalBusiness AI
 
-## Resumen Ejecutivo
+# Plan Final: Migracion Critica 100% Ejecutable
 
-Construccion de una plataforma SaaS multi-tenant completa con aislamiento total de datos por negocio, sistema de roles, modulos activables por suscripcion y asesor IA contextual. Este plan cubre la arquitectura de base de datos, seguridad RLS, estructura de la aplicacion y flujos de usuario.
+## Resumen
 
----
-
-## Estado Actual
-
-La aplicacion ya cuenta con:
-- Landing page con Header, Hero, Features, Pricing y Footer
-- Sistema de autenticacion basico (login/registro) con Supabase Auth
-- Dashboard shell con sidebar, header y overview (datos de ejemplo)
-- Sistema de diseno profesional configurado (colores, tipografia, componentes UI)
-- Lovable Cloud habilitado (Supabase conectado)
-
-**Faltante critico**: No existe base de datos, ni logica multi-tenant, ni RLS, ni roles.
+Migracion unica y segura que implementa los 5 ajustes criticos con:
+- Nombres de constraints/policies verificados contra la base de datos real
+- Estrategia drop/recreate para evitar conflictos
+- Orden de operaciones que no falla incluso con residuos
+- Seccion de verificacion post-migracion
 
 ---
 
-## Fase 1: Arquitectura de Base de Datos Multi-Tenant
+## Datos Verificados de la Base de Datos Actual
 
-### 1.1 Tipos y Enums
+### Constraints Reales (confirmados)
+| Tabla | Constraint | Tipo |
+|-------|-----------|------|
+| business_modules | business_modules_business_id_module_key | UNIQUE |
+| business_modules | business_modules_business_id_fkey | FK |
+| business_modules | business_modules_pkey | PK |
+| subscriptions | subscriptions_business_id_key | UNIQUE |
+| subscriptions | subscriptions_business_id_fkey | FK |
 
-```text
-+------------------+     +------------------+     +------------------+
-|   app_role       |     | subscription_plan|     | module_type      |
-+------------------+     +------------------+     +------------------+
-| owner            |     | free             |     | clients          |
-| admin            |     | trial            |     | products         |
-| staff            |     | pro              |     | invoicing        |
-+------------------+     | business         |     | payments         |
-                         +------------------+     | ai_advisor       |
-                                                  | reports          |
-                                                  +------------------+
-```
+### Policies Reales (confirmados)
+- clients: "Members can update clients" (sin WITH CHECK)
+- products: "Members can update products" (sin WITH CHECK)
+- invoices: "Members can update invoices" (sin WITH CHECK)
+- payments: "Members can update payments" (sin WITH CHECK)
+- business_members: "Owner/Admin can update members" (sin WITH CHECK)
+- user_roles: "Users can view own roles" (a eliminar)
 
-### 1.2 Tablas Core del Sistema
-
-**profiles** - Perfiles de usuario extendidos
-- id (uuid, PK, referencia auth.users)
-- full_name (text)
-- avatar_url (text)
-- created_at, updated_at
-
-**businesses** - Negocios (tenants)
-- id (uuid, PK)
-- name (text, requerido)
-- slug (text, unico)
-- logo_url (text)
-- industry (text)
-- currency (text, default 'MXN')
-- timezone (text, default 'America/Mexico_City')
-- created_at, updated_at
-
-**business_members** - Membresías usuario-negocio
-- id (uuid, PK)
-- business_id (uuid, FK businesses)
-- user_id (uuid, FK auth.users)
-- role (app_role)
-- is_active (boolean, default true)
-- invited_at, joined_at
-
-**user_roles** - Roles de usuario (tabla separada por seguridad)
-- id (uuid, PK)
-- user_id (uuid, FK auth.users)
-- role (app_role)
-- unique(user_id, role)
-
-### 1.3 Tablas de Suscripcion y Modulos
-
-**subscriptions** - Suscripciones por negocio
-- id (uuid, PK)
-- business_id (uuid, FK businesses, unique)
-- plan (subscription_plan)
-- status (active, cancelled, past_due, trialing)
-- trial_ends_at (timestamptz)
-- current_period_start, current_period_end
-- created_at, updated_at
-
-**business_modules** - Modulos habilitados por negocio
-- id (uuid, PK)
-- business_id (uuid, FK businesses)
-- module (module_type)
-- is_enabled (boolean)
-- limits (jsonb) - limites especificos del plan
-- unique(business_id, module)
-
-### 1.4 Tablas de Modulos Operativos
-
-**clients** - Clientes del negocio
-- id (uuid, PK)
-- business_id (uuid, FK businesses, NOT NULL)
-- name (text)
-- email (text)
-- phone (text)
-- company (text)
-- notes (text)
-- is_active (boolean, default true)
-- created_by (uuid, FK auth.users)
-- created_at, updated_at
-
-**products** - Productos/servicios
-- id (uuid, PK)
-- business_id (uuid, FK businesses, NOT NULL)
-- name (text)
-- description (text)
-- price (numeric)
-- unit (text)
-- category (text)
-- is_active (boolean, default true)
-- created_by (uuid, FK auth.users)
-- created_at, updated_at
-
-**invoices** - Facturas
-- id (uuid, PK)
-- business_id (uuid, FK businesses, NOT NULL)
-- client_id (uuid, FK clients)
-- invoice_number (text)
-- status (draft, sent, paid, overdue, cancelled)
-- subtotal, tax, total (numeric)
-- due_date (date)
-- paid_at (timestamptz)
-- notes (text)
-- created_by (uuid, FK auth.users)
-- created_at, updated_at
-
-**invoice_items** - Items de factura
-- id (uuid, PK)
-- invoice_id (uuid, FK invoices)
-- product_id (uuid, FK products)
-- description (text)
-- quantity (numeric)
-- unit_price (numeric)
-- total (numeric)
-
-**payments** - Pagos recibidos
-- id (uuid, PK)
-- business_id (uuid, FK businesses, NOT NULL)
-- invoice_id (uuid, FK invoices)
-- amount (numeric)
-- payment_method (text)
-- payment_date (date)
-- notes (text)
-- created_by (uuid, FK auth.users)
-- created_at, updated_at
-
-### 1.5 Tabla de Auditoria
-
-**audit_logs** - Registro de operaciones criticas
-- id (uuid, PK)
-- business_id (uuid, FK businesses)
-- user_id (uuid, FK auth.users)
-- action (text) - create, update, delete
-- table_name (text)
-- record_id (uuid)
-- old_data (jsonb)
-- new_data (jsonb)
-- ip_address (text)
-- created_at
+### Decision sobre Pricing
+La landing page tiene pricing hardcodeado, por lo tanto policies de `plans` y `modules` usaran `authenticated` (no `anon`).
 
 ---
 
-## Fase 2: Seguridad RLS (Row Level Security)
+## Fase 1: Migracion SQL
 
-### 2.1 Funcion de Verificacion de Membresia
+### 1.1 Eliminar user_roles
 
 ```sql
--- Verificar si usuario es miembro activo de un negocio
-create or replace function public.is_member_of_business(_business_id uuid)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select exists (
-    select 1 from business_members
-    where business_id = _business_id
-      and user_id = auth.uid()
-      and is_active = true
-  )
+DROP POLICY IF EXISTS "Users can view own roles" ON public.user_roles;
+DROP TABLE IF EXISTS public.user_roles;
+```
+
+### 1.2 Crear catalogo de plans
+
+```sql
+CREATE TABLE public.plans (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  price_monthly NUMERIC(10,2) DEFAULT 0,
+  price_yearly NUMERIC(10,2) DEFAULT 0,
+  limits JSONB DEFAULT '{}',
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  display_order INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO public.plans (key, name, price_monthly, price_yearly, display_order, limits) VALUES
+  ('free', 'Gratis', 0, 0, 1, '{"clients": 10, "invoices_per_month": 5}'),
+  ('trial', 'Prueba', 0, 0, 2, '{"clients": 100, "invoices_per_month": 50}'),
+  ('pro', 'Pro', 299, 2990, 3, '{"clients": 500, "invoices_per_month": 200}'),
+  ('business', 'Business', 599, 5990, 4, '{"clients": -1, "invoices_per_month": -1}');
+
+ALTER TABLE public.plans ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Authenticated users can view active plans"
+ON public.plans FOR SELECT
+TO authenticated
+USING (is_active = true);
+```
+
+### 1.3 Crear catalogo de modules
+
+```sql
+CREATE TABLE public.modules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  description TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  display_order INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO public.modules (key, name, description, display_order) VALUES
+  ('clients', 'Clientes', 'Gestion de clientes y contactos', 1),
+  ('products', 'Productos', 'Catalogo de productos y servicios', 2),
+  ('invoicing', 'Facturacion', 'Emision y gestion de facturas', 3),
+  ('payments', 'Pagos', 'Registro y seguimiento de pagos', 4),
+  ('ai_advisor', 'Asesor IA', 'Asistente inteligente de negocios', 5),
+  ('reports', 'Reportes', 'Reportes y estadisticas avanzadas', 6);
+
+ALTER TABLE public.modules ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Authenticated users can view active modules"
+ON public.modules FOR SELECT
+TO authenticated
+USING (is_active = true);
+```
+
+### 1.4 Crear plan_modules (relacion plan-modulo)
+
+```sql
+CREATE TABLE public.plan_modules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  plan_id UUID NOT NULL REFERENCES public.plans(id) ON DELETE CASCADE,
+  module_id UUID NOT NULL REFERENCES public.modules(id) ON DELETE CASCADE,
+  limits JSONB DEFAULT '{}',
+  UNIQUE(plan_id, module_id)
+);
+
+-- Free: clients y products
+INSERT INTO public.plan_modules (plan_id, module_id)
+SELECT p.id, m.id FROM plans p, modules m 
+WHERE p.key = 'free' AND m.key IN ('clients', 'products');
+
+-- Trial: clients, products, invoicing, payments
+INSERT INTO public.plan_modules (plan_id, module_id)
+SELECT p.id, m.id FROM plans p, modules m 
+WHERE p.key = 'trial' AND m.key IN ('clients', 'products', 'invoicing', 'payments');
+
+-- Pro: todos excepto reports
+INSERT INTO public.plan_modules (plan_id, module_id)
+SELECT p.id, m.id FROM plans p, modules m 
+WHERE p.key = 'pro' AND m.key IN ('clients', 'products', 'invoicing', 'payments', 'ai_advisor');
+
+-- Business: todos los modulos
+INSERT INTO public.plan_modules (plan_id, module_id)
+SELECT p.id, m.id FROM plans p, modules m 
+WHERE p.key = 'business';
+
+ALTER TABLE public.plan_modules ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Authenticated users can view plan modules"
+ON public.plan_modules FOR SELECT
+TO authenticated
+USING (true);
+```
+
+### 1.5 Modificar subscriptions (enum a FK)
+
+Estrategia segura aunque existan datos:
+
+```sql
+-- Paso 1: Agregar columna nullable
+ALTER TABLE public.subscriptions
+  ADD COLUMN plan_id UUID REFERENCES public.plans(id);
+
+-- Paso 2: Set default para nuevos registros
+UPDATE public.subscriptions s
+SET plan_id = (SELECT id FROM plans WHERE key = s.plan::text)
+WHERE plan_id IS NULL;
+
+-- Paso 3: Default a trial si no se pudo mapear
+UPDATE public.subscriptions s
+SET plan_id = (SELECT id FROM plans WHERE key = 'trial')
+WHERE plan_id IS NULL;
+
+-- Paso 4: Hacer NOT NULL
+ALTER TABLE public.subscriptions
+  ALTER COLUMN plan_id SET NOT NULL;
+
+-- Paso 5: Eliminar columna enum
+ALTER TABLE public.subscriptions DROP COLUMN plan;
+```
+
+### 1.6 Recrear business_modules (drop/recreate limpio)
+
+Como no hay datos, recreamos la tabla para evitar problemas de constraints:
+
+```sql
+-- Guardar policies existentes
+DROP POLICY IF EXISTS "Members can view modules" ON public.business_modules;
+DROP POLICY IF EXISTS "Owner can manage modules" ON public.business_modules;
+
+-- Drop tabla completa (incluye constraints)
+DROP TABLE IF EXISTS public.business_modules;
+
+-- Recrear con nueva estructura
+CREATE TABLE public.business_modules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id UUID NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,
+  module_id UUID NOT NULL REFERENCES public.modules(id) ON DELETE CASCADE,
+  is_enabled BOOLEAN NOT NULL DEFAULT true,
+  limits JSONB DEFAULT '{}',
+  UNIQUE(business_id, module_id)
+);
+
+CREATE INDEX idx_business_modules_business ON public.business_modules(business_id);
+
+ALTER TABLE public.business_modules ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Members can view modules"
+ON public.business_modules FOR SELECT
+TO authenticated
+USING (is_member_of_business(business_id));
+
+CREATE POLICY "Owner can manage modules"
+ON public.business_modules FOR ALL
+TO authenticated
+USING (has_business_role(business_id, 'owner'))
+WITH CHECK (has_business_role(business_id, 'owner'));
+```
+
+### 1.7 Agregar active_business_id en profiles
+
+```sql
+ALTER TABLE public.profiles
+  ADD COLUMN active_business_id UUID REFERENCES public.businesses(id) ON DELETE SET NULL;
+
+-- RPC para setear negocio activo (SECURITY DEFINER con validacion)
+CREATE OR REPLACE FUNCTION public.set_active_business(_business_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NOT is_member_of_business(_business_id) THEN
+    RAISE EXCEPTION 'No eres miembro de este negocio';
+  END IF;
+  
+  UPDATE profiles
+  SET active_business_id = _business_id,
+      updated_at = now()
+  WHERE id = auth.uid();
+  
+  RETURN true;
+END;
+$$;
+
+-- Funcion simple para obtener negocio activo (sin SECURITY DEFINER)
+CREATE OR REPLACE FUNCTION public.get_active_business()
+RETURNS uuid
+LANGUAGE sql
+STABLE
+SET search_path = public
+AS $$
+  SELECT active_business_id FROM profiles WHERE id = auth.uid()
 $$;
 ```
 
-### 2.2 Funcion de Verificacion de Rol
+### 1.8 Crear business_settings
 
 ```sql
--- Verificar rol del usuario en un negocio
-create or replace function public.has_business_role(_business_id uuid, _role app_role)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select exists (
-    select 1 from business_members
-    where business_id = _business_id
-      and user_id = auth.uid()
-      and role = _role
-      and is_active = true
-  )
+CREATE TABLE public.business_settings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id UUID NOT NULL UNIQUE REFERENCES public.businesses(id) ON DELETE CASCADE,
+  next_invoice_number INTEGER NOT NULL DEFAULT 1,
+  invoice_prefix TEXT DEFAULT 'FAC-',
+  tax_rate NUMERIC(5,2) DEFAULT 16.00,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_business_settings_business ON public.business_settings(business_id);
+
+ALTER TABLE public.business_settings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Members can view settings"
+ON public.business_settings FOR SELECT
+TO authenticated
+USING (is_member_of_business(business_id));
+
+CREATE POLICY "Owner/Admin can manage settings"
+ON public.business_settings FOR ALL
+TO authenticated
+USING (has_min_role(business_id, 'admin'))
+WITH CHECK (has_min_role(business_id, 'admin'));
+
+-- Trigger para updated_at
+CREATE TRIGGER update_business_settings_updated_at
+  BEFORE UPDATE ON public.business_settings
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+-- Funcion atomica para generar numero de factura
+CREATE OR REPLACE FUNCTION public.generate_invoice_number(_business_id uuid)
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  _settings business_settings%ROWTYPE;
+  _invoice_number TEXT;
+BEGIN
+  -- Validacion de membresia (critico)
+  IF NOT is_member_of_business(_business_id) THEN
+    RAISE EXCEPTION 'No tienes permiso para generar facturas en este negocio';
+  END IF;
+
+  SELECT * INTO _settings
+  FROM business_settings
+  WHERE business_id = _business_id
+  FOR UPDATE;
+  
+  IF NOT FOUND THEN
+    INSERT INTO business_settings (business_id, next_invoice_number, invoice_prefix)
+    VALUES (_business_id, 2, 'FAC-')
+    RETURNING * INTO _settings;
+    
+    RETURN 'FAC-' || LPAD('1', 6, '0');
+  END IF;
+  
+  _invoice_number := _settings.invoice_prefix || LPAD(_settings.next_invoice_number::TEXT, 6, '0');
+  
+  UPDATE business_settings
+  SET next_invoice_number = next_invoice_number + 1,
+      updated_at = now()
+  WHERE business_id = _business_id;
+  
+  RETURN _invoice_number;
+END;
 $$;
 ```
 
-### 2.3 Funcion de Minimo Rol
+### 1.9 Corregir policies UPDATE (agregar WITH CHECK)
 
 ```sql
--- Verificar que usuario tiene al menos cierto rol
-create or replace function public.has_min_role(_business_id uuid, _min_role app_role)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select exists (
-    select 1 from business_members
-    where business_id = _business_id
-      and user_id = auth.uid()
-      and is_active = true
-      and (
-        role = 'owner'
-        or (role = 'admin' and _min_role in ('admin', 'staff'))
-        or (role = 'staff' and _min_role = 'staff')
-      )
-  )
+-- Clients
+DROP POLICY IF EXISTS "Members can update clients" ON public.clients;
+CREATE POLICY "Members can update clients"
+ON public.clients FOR UPDATE
+TO authenticated
+USING (is_member_of_business(business_id))
+WITH CHECK (is_member_of_business(business_id));
+
+-- Products
+DROP POLICY IF EXISTS "Members can update products" ON public.products;
+CREATE POLICY "Members can update products"
+ON public.products FOR UPDATE
+TO authenticated
+USING (is_member_of_business(business_id))
+WITH CHECK (is_member_of_business(business_id));
+
+-- Invoices
+DROP POLICY IF EXISTS "Members can update invoices" ON public.invoices;
+CREATE POLICY "Members can update invoices"
+ON public.invoices FOR UPDATE
+TO authenticated
+USING (is_member_of_business(business_id))
+WITH CHECK (is_member_of_business(business_id));
+
+-- Payments
+DROP POLICY IF EXISTS "Members can update payments" ON public.payments;
+CREATE POLICY "Members can update payments"
+ON public.payments FOR UPDATE
+TO authenticated
+USING (is_member_of_business(business_id))
+WITH CHECK (is_member_of_business(business_id));
+
+-- Business members
+DROP POLICY IF EXISTS "Owner/Admin can update members" ON public.business_members;
+CREATE POLICY "Owner/Admin can update members"
+ON public.business_members FOR UPDATE
+TO authenticated
+USING (has_min_role(business_id, 'admin'))
+WITH CHECK (has_min_role(business_id, 'admin'));
+```
+
+### 1.10 Mejorar auditoria
+
+```sql
+ALTER TABLE public.audit_logs
+  ADD COLUMN actor_user_id UUID;
+
+CREATE OR REPLACE FUNCTION public.audit_log_changes()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  _business_id uuid;
+  _record_id uuid;
+  _actor_id uuid;
+BEGIN
+  BEGIN
+    _actor_id := current_setting('app.actor_user_id', true)::uuid;
+  EXCEPTION WHEN OTHERS THEN
+    _actor_id := NULL;
+  END;
+  
+  _actor_id := COALESCE(_actor_id, auth.uid());
+
+  IF TG_OP = 'DELETE' THEN
+    _business_id := OLD.business_id;
+    _record_id := OLD.id;
+  ELSE
+    _business_id := NEW.business_id;
+    _record_id := NEW.id;
+  END IF;
+
+  INSERT INTO public.audit_logs (
+    business_id,
+    user_id,
+    actor_user_id,
+    action,
+    table_name,
+    record_id,
+    old_data,
+    new_data
+  ) VALUES (
+    _business_id,
+    auth.uid(),
+    _actor_id,
+    TG_OP,
+    TG_TABLE_NAME,
+    _record_id,
+    CASE WHEN TG_OP IN ('UPDATE', 'DELETE') THEN to_jsonb(OLD) ELSE NULL END,
+    CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN to_jsonb(NEW) ELSE NULL END
+  );
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
 $$;
 ```
 
-### 2.4 Politicas RLS por Tabla
+---
 
-Cada tabla operativa (clients, products, invoices, payments) tendra:
-- SELECT: Solo miembros activos del negocio
-- INSERT: Miembros activos + business_id validado
-- UPDATE: Miembros activos + validacion de rol segun operacion
-- DELETE: Solo owner/admin del negocio
+## Fase 2: Cambios de Frontend
+
+### 2.1 Actualizar src/types/database.ts
+
+Nuevos tipos e interfaces:
+- **Plan**: id, key, name, price_monthly, price_yearly, limits, is_active
+- **Module**: id, key, name, description, is_active
+- **PlanModule**: id, plan_id, module_id, limits
+- **BusinessSettings**: id, business_id, next_invoice_number, invoice_prefix, tax_rate
+- **Profile**: agregar active_business_id
+- **Subscription**: cambiar plan por plan_id
+- **BusinessModule**: cambiar module por module_id
+
+Eliminar:
+- Interface UserRole (ya no existe tabla)
+
+### 2.2 Actualizar src/contexts/BusinessContext.tsx
+
+1. Al cargar, obtener active_business_id desde profile
+2. En setActiveBusiness: llamar RPC set_active_business()
+3. Obtener modulos mediante JOIN con tabla modules para tener el key
+4. Mantener localStorage como cache rapido
+
+### 2.3 Actualizar src/hooks/useModuleAccess.ts
+
+- Parametro sigue siendo string (module key)
+- Comparacion contra module.key obtenido del JOIN
+
+### 2.4 Actualizar src/pages/Onboarding.tsx
+
+Al crear negocio:
+1. Obtener plan 'trial' de tabla plans
+2. Crear subscription con plan_id (FK)
+3. Obtener modulos del plan desde plan_modules
+4. Crear business_modules con module_id (FK)
+5. Crear business_settings inicial
+6. Llamar set_active_business() para persistir
 
 ---
 
-## Fase 3: Estructura de Aplicacion Frontend
+## Verificaciones Post-Migracion (SQL)
 
-### 3.1 Contexto Global de Negocio Activo
+```sql
+-- 1. user_roles eliminada
+SELECT EXISTS (
+  SELECT FROM information_schema.tables 
+  WHERE table_name = 'user_roles'
+) AS user_roles_exists; -- debe ser FALSE
 
-```text
-ActiveBusinessContext
-|
-+-- activeBusinessId: string | null
-+-- activeBusiness: Business | null
-+-- userBusinesses: Business[]
-+-- userRole: 'owner' | 'admin' | 'staff' | null
-+-- enabledModules: ModuleType[]
-+-- setActiveBusiness: (id) => void
-+-- refreshBusinesses: () => void
+-- 2. plans tiene 4 registros
+SELECT COUNT(*) = 4 AS plans_ok FROM plans;
+
+-- 3. modules tiene 6 registros
+SELECT COUNT(*) = 6 AS modules_ok FROM modules;
+
+-- 4. plan_modules tiene asociaciones correctas
+SELECT p.key, COUNT(pm.id) as module_count
+FROM plans p
+LEFT JOIN plan_modules pm ON pm.plan_id = p.id
+GROUP BY p.key
+ORDER BY p.display_order;
+-- free: 2, trial: 4, pro: 5, business: 6
+
+-- 5. subscriptions.plan_id existe y plan no existe
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'subscriptions' AND column_name IN ('plan', 'plan_id');
+-- solo debe aparecer plan_id
+
+-- 6. business_modules.module_id existe y module no existe
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'business_modules' AND column_name IN ('module', 'module_id');
+-- solo debe aparecer module_id
+
+-- 7. profiles tiene active_business_id
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'profiles' AND column_name = 'active_business_id';
+
+-- 8. business_settings existe
+SELECT EXISTS (
+  SELECT FROM information_schema.tables 
+  WHERE table_name = 'business_settings'
+) AS business_settings_exists;
+
+-- 9. Funciones RPC existen
+SELECT proname FROM pg_proc 
+WHERE proname IN ('set_active_business', 'get_active_business', 'generate_invoice_number')
+ORDER BY proname;
+-- deben aparecer las 3
+
+-- 10. Policies UPDATE tienen WITH CHECK
+SELECT tablename, policyname, cmd, qual IS NOT NULL as has_using, with_check IS NOT NULL as has_with_check
+FROM pg_policies
+WHERE cmd = 'UPDATE' AND tablename IN ('clients', 'products', 'invoices', 'payments', 'business_members');
+-- todos deben tener has_with_check = true
 ```
-
-### 3.2 Estructura de Rutas
-
-```text
-/                      -> Landing page (publica)
-/auth                  -> Login/Registro
-/onboarding           -> Crear primer negocio
-/select-business      -> Selector de negocio (si tiene varios)
-/dashboard            -> Dashboard con validacion de negocio activo
-  /dashboard/clients  -> Modulo clientes
-  /dashboard/products -> Modulo productos
-  /dashboard/invoices -> Modulo facturacion
-  /dashboard/payments -> Modulo pagos
-  /dashboard/ai       -> Asesor IA
-  /dashboard/settings -> Configuracion del negocio
-```
-
-### 3.3 Componentes de Proteccion
-
-- **RequireAuth**: Redirige a /auth si no autenticado
-- **RequireBusiness**: Redirige a /onboarding si no tiene negocio
-- **RequireModule**: Oculta/bloquea si modulo no habilitado
-- **RequireRole**: Oculta/bloquea acciones segun rol
-
-### 3.4 Hooks Personalizados
-
-- useActiveBusiness() - Acceso al contexto de negocio
-- useBusinessMembers() - Lista de miembros del negocio
-- useModuleAccess(module) - Verificar acceso a modulo
-- useRoleAccess(minRole) - Verificar permisos por rol
-
----
-
-## Fase 4: Flujo de Usuario
-
-### 4.1 Registro y Onboarding
-
-```text
-1. Usuario se registra en /auth
-2. Auto-confirm activo (sin verificacion email)
-3. Se crea perfil en profiles automaticamente (trigger)
-4. Redirige a /onboarding
-5. Crea su primer negocio
-6. Se le asigna rol "owner"
-7. Se crea suscripcion "trial" con modulos basicos
-8. Redirige a /dashboard
-```
-
-### 4.2 Login con Multiples Negocios
-
-```text
-1. Usuario inicia sesion
-2. Sistema consulta business_members
-3. Si tiene 1 negocio -> activeBusinessId automatico
-4. Si tiene 0 negocios -> /onboarding
-5. Si tiene 2+ negocios -> /select-business
-6. Dashboard carga con contexto del negocio activo
-```
-
----
-
-## Fase 5: Modulo de Asesor IA
-
-### 5.1 Arquitectura
-
-```text
-Usuario pregunta
-     |
-     v
-Edge Function: ai-advisor
-     |
-     v
-1. Validar auth + business_id
-2. Obtener rol del usuario
-3. Determinar herramientas disponibles segun rol
-4. Consultar datos del negocio (respetando scope)
-5. Llamar a modelo IA con contexto
-6. Retornar respuesta
-```
-
-### 5.2 Herramientas Internas del Asesor
-
-El asesor IA actuara como orquestador con herramientas:
-- get_business_summary: Resumen general del negocio
-- get_revenue_stats: Ingresos del periodo
-- get_pending_invoices: Facturas pendientes
-- get_overdue_payments: Pagos vencidos
-- get_top_clients: Mejores clientes
-- get_recent_activity: Actividad reciente
-
-### 5.3 Restricciones del Asesor
-
-- Solo accede a datos del business_id activo
-- Respeta limites del rol (staff no ve todo)
-- Si no hay datos, responde "No tengo datos suficientes"
-- Nunca inventa cifras
-- Cita la fuente de los datos cuando aplica
-
----
-
-## Fase 6: Sistema de Auditoria
-
-### 6.1 Trigger de Auditoria
-
-Se creara un trigger generico para tablas criticas:
-- clients, products, invoices, payments
-- Registra: INSERT, UPDATE, DELETE
-- Captura: old_data, new_data, user_id, timestamp
-
-### 6.2 Consulta de Auditoria
-
-Solo owner/admin pueden ver audit_logs de su negocio.
 
 ---
 
 ## Archivos a Crear/Modificar
 
-### Base de Datos (Migracion SQL)
-1. Crear enums: app_role, subscription_plan, module_type
-2. Crear tablas: profiles, businesses, business_members, user_roles, subscriptions, business_modules, clients, products, invoices, invoice_items, payments, audit_logs
-3. Crear funciones: is_member_of_business, has_business_role, has_min_role
-4. Crear politicas RLS para todas las tablas
-5. Crear triggers: auto-crear profile, auditoria
-
-### Frontend - Contexto y Hooks
-- src/contexts/BusinessContext.tsx
-- src/hooks/useActiveBusiness.ts
-- src/hooks/useModuleAccess.ts
-- src/hooks/useRoleAccess.ts
-
-### Frontend - Componentes de Proteccion
-- src/components/auth/RequireAuth.tsx
-- src/components/auth/RequireBusiness.tsx
-- src/components/auth/RequireModule.tsx
-- src/components/auth/RequireRole.tsx
-
-### Frontend - Paginas Nuevas
-- src/pages/Onboarding.tsx
-- src/pages/SelectBusiness.tsx
-- src/pages/dashboard/Clients.tsx
-- src/pages/dashboard/Products.tsx
-- src/pages/dashboard/Invoices.tsx
-- src/pages/dashboard/Payments.tsx
-- src/pages/dashboard/AIAdvisor.tsx
-- src/pages/dashboard/Settings.tsx
-
-### Backend - Edge Functions
-- supabase/functions/ai-advisor/index.ts
-- supabase/functions/create-business/index.ts
-- supabase/functions/business-stats/index.ts
+| Archivo | Accion |
+|---------|--------|
+| supabase/migrations/YYYYMMDD_critical_adjustments.sql | Crear (migracion completa) |
+| src/types/database.ts | Modificar (nuevos tipos) |
+| src/contexts/BusinessContext.tsx | Modificar (sync con DB) |
+| src/hooks/useModuleAccess.ts | Modificar (usar module key) |
+| src/pages/Onboarding.tsx | Modificar (crear settings + FKs) |
 
 ---
 
-## Orden de Implementacion
+## Orden de Ejecucion
 
-1. **Migracion de base de datos** - Crear toda la estructura SQL
-2. **Contexto de negocio** - BusinessContext con logica de seleccion
-3. **Componentes de proteccion** - RequireAuth, RequireBusiness
-4. **Flujo de onboarding** - Crear primer negocio
-5. **Modulos operativos** - Clientes, Productos, Facturas, Pagos
-6. **Dashboard con datos reales** - Conectar a base de datos
-7. **Asesor IA** - Edge function con herramientas
-8. **Auditoria** - Triggers y visualizacion
-
----
-
-## Consideraciones de Seguridad
-
-- Todas las tablas operativas requieren business_id NOT NULL
-- RLS habilitado en TODAS las tablas
-- Roles almacenados en tabla separada (user_roles)
-- Funciones security definer para verificacion de acceso
-- Edge functions validan auth antes de cualquier operacion
-- Nunca se acepta business_id del cliente sin validar membresia
-- Auditoria de operaciones criticas
+1. Ejecutar migracion SQL
+2. Verificar con queries de sanity check
+3. Actualizar types TypeScript
+4. Modificar BusinessContext
+5. Modificar Onboarding
+6. Ajustar hook de modulos
+7. Probar flujo completo de registro + onboarding
 
 ---
 
-## Resultado Final
+## Impacto en Seguridad
 
-Al completar este plan, TotalBusiness AI sera:
-- Un SaaS multi-tenant con aislamiento total de datos
-- Seguro por diseno con RLS y validacion de roles
-- Modular con activacion por plan
-- Con IA responsable que respeta contexto y permisos
-- Auditable para operaciones criticas
-- Listo para vender y escalar
+- Eliminacion de superficie de ataque redundante (user_roles)
+- Prevencion de cambio de business_id en UPDATE (WITH CHECK)
+- Validacion de membresia en funciones SECURITY DEFINER
+- get_active_business() sin SECURITY DEFINER (menos riesgo)
+- Atomicidad garantizada en numeracion de facturas
+- Trazabilidad completa incluso desde Edge Functions
+
