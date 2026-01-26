@@ -1,203 +1,238 @@
 
 
-# Plan: Corregir Política SELECT en businesses para Onboarding
+# Plan: Implementar Actividad Reciente Real en Dashboard
 
-## Problema Identificado
+## Resumen
 
-### Error
-```
-new row violates row-level security policy for table "businesses"
-```
-
-### Causa Raíz
-
-El problema **NO está en la política INSERT**, que funciona correctamente (`auth.uid() IS NOT NULL`).
-
-El problema está en la **cadena de operaciones** del frontend:
-```javascript
-await supabase
-  .from('businesses')
-  .insert({ name, slug, industry })
-  .select()   // ← AQUÍ FALLA
-  .single();
-```
-
-Cuando Supabase ejecuta `.insert(...).select()`, necesita:
-1. ✅ Pasar la política INSERT (`auth.uid() IS NOT NULL`) - **OK**
-2. ❌ Pasar la política SELECT (`is_member_of_business(id)`) - **FALLA**
-
-**El usuario NO es miembro del negocio todavía** porque la inserción en `business_members` ocurre DESPUÉS. Por lo tanto, `is_member_of_business(id)` retorna FALSE y la operación completa falla.
+Reemplazar los datos de ejemplo hardcodeados en el dashboard con actividad real del negocio, mostrando los últimos 10 eventos combinados de pagos, facturas y clientes nuevos.
 
 ---
 
-## Flujo Actual (Fallido)
+## Diseño de la Solución
 
-```text
-1. Usuario crea negocio
-   -> INSERT businesses ✅ (pasa la política INSERT)
-   -> SELECT para retornar datos ❌ (is_member_of_business = FALSE)
-   -> Operación completa falla con RLS error
+La actividad reciente combinará 3 tipos de eventos ordenados por fecha más reciente:
 
-2. business_members nunca se inserta (porque el paso 1 falló)
-```
+| Tipo | Fuente | Descripción |
+|------|--------|-------------|
+| `payment` | tabla `payments` | Pagos recibidos |
+| `invoice` | tabla `invoices` | Facturas creadas |
+| `client` | tabla `clients` | Clientes nuevos |
 
----
-
-## Solución
-
-Modificar la política SELECT de `businesses` para incluir un caso especial: **permitir SELECT de negocios que no tienen ningún miembro todavía** (recién creados).
-
-### Nueva Política SELECT
-
-```sql
-DROP POLICY IF EXISTS "Members can view their businesses" ON public.businesses;
-
-CREATE POLICY "Members can view their businesses"
-ON public.businesses FOR SELECT
-TO authenticated
-USING (
-  -- Caso 1: Usuario es miembro del negocio
-  is_member_of_business(id)
-  OR
-  -- Caso 2: Negocio recién creado (sin miembros aún)
-  -- Esto permite que el INSERT...SELECT funcione durante onboarding
-  NOT EXISTS (
-    SELECT 1 FROM public.business_members bm 
-    WHERE bm.business_id = id
-  )
-);
-```
-
-### Por qué es seguro
-
-1. **Negocios existentes**: Solo visibles para sus miembros (como antes)
-2. **Negocios nuevos (0 miembros)**: Visibles temporalmente para cualquier usuario autenticado
-3. **Ventana de exposición mínima**: Solo entre el INSERT del negocio y el INSERT del primer miembro (milisegundos)
-4. **No hay datos sensibles**: Un negocio recién creado solo tiene name/slug/industry
-5. **El primer miembro se agrega inmediatamente**: El onboarding lo hace en la siguiente línea
+El RPC devolverá un máximo de 10 eventos, ordenados por `created_at DESC`.
 
 ---
 
-## Flujo Corregido
+## Archivos a Crear/Modificar
 
-```text
-1. Usuario crea negocio
-   -> INSERT businesses ✅ (auth.uid() IS NOT NULL)
-   -> SELECT businesses ✅ (NOT EXISTS members = TRUE para negocio nuevo)
-   -> Retorna business.id
-
-2. Usuario se agrega como owner
-   -> INSERT business_members ✅ (NOT EXISTS = TRUE, es primer miembro)
-   -> Ahora is_member_of_business = TRUE
-
-3. Resto del onboarding
-   -> subscription, business_modules, business_settings
-   -> Todas pasan porque ya es miembro
-
-4. Navega a /dashboard ✅
-```
-
----
-
-## Archivo a Crear
-
-| Archivo | Descripción |
-|---------|-------------|
-| `supabase/migrations/xxx_fix_businesses_select_policy.sql` | Corrige política SELECT |
-
----
-
-## Contenido de la Migración
-
-```sql
--- Fix: Permitir SELECT de negocios recién creados (sin miembros aún)
--- Esto permite que el flujo INSERT...SELECT del onboarding funcione
-
-DROP POLICY IF EXISTS "Members can view their businesses" ON public.businesses;
-
-CREATE POLICY "Members can view their businesses"
-ON public.businesses FOR SELECT
-TO authenticated
-USING (
-  -- Caso 1: Usuario es miembro activo del negocio
-  public.is_member_of_business(id)
-  OR
-  -- Caso 2: Negocio recién creado sin miembros (permite INSERT...SELECT en onboarding)
-  NOT EXISTS (
-    SELECT 1 FROM public.business_members bm 
-    WHERE bm.business_id = id
-  )
-);
-```
-
----
-
-## Alternativa Considerada (No elegida)
-
-**Opción B**: Modificar el frontend para NO usar `.select()` después del insert y obtener el id de otra forma.
-
-```javascript
-// En lugar de:
-const { data: business } = await supabase
-  .from('businesses')
-  .insert({...})
-  .select()
-  .single();
-
-// Usar:
-const { data: business } = await supabase
-  .from('businesses')
-  .insert({...})
-  .select('id')  // Solo id, podría fallar igual
-  .single();
-```
-
-**Razón para NO elegirla**: El problema persiste porque `.select()` siempre necesita pasar RLS. La solución en la política es más robusta.
-
----
-
-## Checklist de Validación
-
-- [ ] Registrar nuevo usuario
-- [ ] Completar onboarding (crear negocio)
-- [ ] Verificar que el INSERT + SELECT de businesses funciona
-- [ ] Verificar que business_members se crea correctamente
-- [ ] Verificar acceso al dashboard
-- [ ] Verificar que usuarios NO pueden ver negocios de otros (que SÍ tienen miembros)
-
----
-
-## Impacto
-
-- **Crítico**: Sin esta corrección, el onboarding falla en el primer paso
-- **Bajo riesgo**: Solo expone negocios sin miembros (estado transitorio de milisegundos)
-- **Sin cambios en frontend**: El código de Onboarding.tsx ya es correcto
-- **Retrocompatible**: No afecta negocios existentes que ya tienen miembros
+| Archivo | Acción | Descripción |
+|---------|--------|-------------|
+| `supabase/migrations/xxx_add_get_recent_activity_rpc.sql` | Crear | Nueva función RPC |
+| `src/hooks/useRecentActivity.ts` | Crear | Hook para consumir el RPC |
+| `src/components/dashboard/DashboardOverview.tsx` | Modificar | Usar datos reales |
 
 ---
 
 ## Detalles Técnicos
 
-### Por qué `.insert().select()` necesita política SELECT
+### 1. Función RPC `get_recent_activity`
 
-En PostgREST (el API de Supabase), cuando haces:
-```
-POST /rest/v1/businesses?select=*
-```
-
-Internamente ejecuta:
 ```sql
-INSERT INTO businesses (...) VALUES (...) RETURNING *
+CREATE OR REPLACE FUNCTION public.get_recent_activity(
+  _business_id uuid,
+  _limit integer DEFAULT 10
+)
+RETURNS TABLE(
+  event_type text,
+  event_id uuid,
+  title text,
+  description text,
+  amount numeric,
+  created_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $$
+BEGIN
+  -- Validate membership
+  IF NOT is_member_of_business(_business_id) THEN
+    RAISE EXCEPTION 'No tienes permiso para ver actividad de este negocio';
+  END IF;
+
+  RETURN QUERY
+  (
+    -- Payments
+    SELECT 
+      'payment'::text AS event_type,
+      p.id AS event_id,
+      'Pago recibido'::text AS title,
+      COALESCE(i.invoice_number, 'Sin factura')::text AS description,
+      p.amount,
+      p.created_at
+    FROM payments p
+    LEFT JOIN invoices i ON i.id = p.invoice_id
+    WHERE p.business_id = _business_id
+
+    UNION ALL
+
+    -- Invoices
+    SELECT 
+      'invoice'::text AS event_type,
+      inv.id AS event_id,
+      CASE inv.status
+        WHEN 'draft' THEN 'Factura borrador'
+        WHEN 'sent' THEN 'Factura enviada'
+        WHEN 'paid' THEN 'Factura pagada'
+        WHEN 'overdue' THEN 'Factura vencida'
+        ELSE 'Factura creada'
+      END AS title,
+      COALESCE(c.name, 'Sin cliente') || ' - ' || inv.invoice_number AS description,
+      inv.total AS amount,
+      inv.created_at
+    FROM invoices inv
+    LEFT JOIN clients c ON c.id = inv.client_id
+    WHERE inv.business_id = _business_id
+
+    UNION ALL
+
+    -- New clients
+    SELECT 
+      'client'::text AS event_type,
+      cl.id AS event_id,
+      'Nuevo cliente'::text AS title,
+      cl.name::text AS description,
+      NULL::numeric AS amount,
+      cl.created_at
+    FROM clients cl
+    WHERE cl.business_id = _business_id
+  )
+  ORDER BY created_at DESC
+  LIMIT _limit;
+END;
+$$;
 ```
 
-Pero PostgREST aplica políticas RLS tanto al INSERT (WITH CHECK) como al resultado (USING de SELECT). Si el usuario no puede ver la fila, la operación falla con RLS error.
+Esta función:
+- Valida membresía antes de ejecutar
+- Combina 3 fuentes con `UNION ALL`
+- Ordena por fecha descendente
+- Limita a N resultados (default 10)
+- Usa `SECURITY DEFINER` para acceder a tablas con RLS
 
-### Patrón común en Supabase
+---
 
-Este es un patrón conocido cuando:
-1. Una tabla tiene política SELECT basada en membresía
-2. La membresía se crea DESPUÉS del insert principal
-3. El frontend usa `.insert().select()` para obtener el id
+### 2. Hook `useRecentActivity.ts`
 
-La solución estándar es permitir SELECT de registros "huérfanos" (sin membresías asociadas).
+```typescript
+// Interfaz para cada evento
+interface ActivityEvent {
+  event_type: 'payment' | 'invoice' | 'client';
+  event_id: string;
+  title: string;
+  description: string;
+  amount: number | null;
+  created_at: string;
+}
+
+// Hook retorna
+interface UseRecentActivityReturn {
+  activities: ActivityEvent[];
+  isLoading: boolean;
+  error: Error | null;
+  refetch: () => Promise<void>;
+}
+```
+
+El hook:
+- Usa `activeBusinessId` del contexto
+- Llama al RPC `get_recent_activity`
+- Implementa patrón anti-race-condition con `requestIdRef`
+- Formatea fechas relativas ("Hace 2 horas", "Ayer")
+
+---
+
+### 3. Modificaciones a `DashboardOverview.tsx`
+
+- Eliminar el array hardcodeado `recentActivity`
+- Importar y usar `useRecentActivity`
+- Adaptar el renderizado para usar el nuevo formato de datos
+- Mostrar skeleton mientras carga
+- Formatear montos con `formatPrice` existente
+- Formatear fechas con función relativa (ej: "Hace 5 min")
+
+---
+
+## Formato de Fechas Relativas
+
+Se creará una utilidad para formatear fechas:
+
+```typescript
+function formatRelativeTime(date: string): string {
+  const now = new Date();
+  const past = new Date(date);
+  const diffMs = now.getTime() - past.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  
+  if (diffMins < 1) return 'Ahora';
+  if (diffMins < 60) return `Hace ${diffMins} min`;
+  if (diffMins < 1440) return `Hace ${Math.floor(diffMins / 60)} h`;
+  if (diffMins < 2880) return 'Ayer';
+  return new Intl.DateTimeFormat('es-MX', { 
+    day: 'numeric', 
+    month: 'short' 
+  }).format(past);
+}
+```
+
+---
+
+## Flujo de Datos
+
+```text
+1. Usuario entra al dashboard
+   -> DashboardOverview monta
+
+2. useRecentActivity se ejecuta
+   -> Llama RPC get_recent_activity(business_id)
+
+3. RPC valida membresía y ejecuta
+   -> UNION de payments + invoices + clients
+   -> ORDER BY created_at DESC LIMIT 10
+
+4. Frontend recibe datos
+   -> Mapea a componentes visuales
+   -> Formatea montos y fechas
+
+5. UI muestra actividad real
+   -> Pagos con icono verde y monto positivo
+   -> Facturas con estado y cliente
+   -> Clientes nuevos sin monto
+```
+
+---
+
+## Ejemplo Visual Final
+
+| Icono | Título | Descripción | Monto | Tiempo |
+|-------|--------|-------------|-------|--------|
+| 💳 | Pago recibido | FAC-001 | +$5,000 | Hace 2 h |
+| 📄 | Factura enviada | Cliente XYZ - FAC-002 | $3,500 | Hace 5 h |
+| 👤 | Nuevo cliente | Empresa ABC | - | Ayer |
+
+---
+
+## Consideraciones de Rendimiento
+
+- El RPC usa `LIMIT` para evitar cargar demasiados datos
+- No hay JOINs innecesarios (solo para obtener nombres)
+- Los índices existentes en `created_at` y `business_id` optimizan la query
+- El hook tiene protección contra race conditions
+
+---
+
+## Seguridad
+
+- RLS se bypasea con `SECURITY DEFINER` pero se valida membresía explícitamente
+- Solo usuarios autenticados pueden llamar al RPC
+- Los datos retornados son solo del negocio del usuario
 
