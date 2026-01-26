@@ -1,10 +1,10 @@
 import { useBusiness } from '@/contexts/BusinessContext';
-import type { ModuleType } from '@/types/database';
+import type { ModuleKey } from '@/types/database';
 
-export function useModuleAccess(module: ModuleType) {
+export function useModuleAccess(moduleKey: ModuleKey) {
   const { enabledModules, activeBusiness } = useBusiness();
   
-  const hasAccess = enabledModules.includes(module);
+  const hasAccess = enabledModules.includes(moduleKey);
   const isLoading = !activeBusiness;
   
   return {

@@ -4,12 +4,10 @@ import { supabase } from '@/integrations/supabase/client';
 import { User } from '@supabase/supabase-js';
 import type { 
   Business, 
-  BusinessMember, 
-  BusinessModule, 
-  Subscription, 
   AppRole, 
-  ModuleType,
-  BusinessWithMembership 
+  ModuleKey,
+  BusinessWithMembership,
+  BusinessModuleWithKey
 } from '@/types/database';
 
 interface BusinessContextType {
@@ -22,7 +20,7 @@ interface BusinessContextType {
   activeBusiness: BusinessWithMembership | null;
   userBusinesses: BusinessWithMembership[];
   userRole: AppRole | null;
-  enabledModules: ModuleType[];
+  enabledModules: ModuleKey[];
   
   // Actions
   setActiveBusiness: (businessId: string) => Promise<void>;
@@ -45,7 +43,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
   const [activeBusinessId, setActiveBusinessId] = useState<string | null>(null);
   const [activeBusiness, setActiveBusinessState] = useState<BusinessWithMembership | null>(null);
   const [userBusinesses, setUserBusinesses] = useState<BusinessWithMembership[]>([]);
-  const [enabledModules, setEnabledModules] = useState<ModuleType[]>([]);
+  const [enabledModules, setEnabledModules] = useState<ModuleKey[]>([]);
 
   // Derived state
   const userRole = activeBusiness?.role ?? null;
@@ -87,11 +85,17 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       }));
   }, []);
 
-  // Fetch modules for a business
-  const fetchBusinessModules = useCallback(async (businessId: string): Promise<ModuleType[]> => {
+  // Fetch modules for a business (now using module_id FK and joining with modules table)
+  const fetchBusinessModules = useCallback(async (businessId: string): Promise<ModuleKey[]> => {
     const { data, error } = await supabase
       .from('business_modules')
-      .select('module, is_enabled')
+      .select(`
+        module_id,
+        is_enabled,
+        modules (
+          key
+        )
+      `)
       .eq('business_id', businessId)
       .eq('is_enabled', true);
 
@@ -100,10 +104,27 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       return [];
     }
 
-    return (data || []).map((m) => m.module as ModuleType);
+    return (data || [])
+      .filter((m) => m.modules !== null)
+      .map((m) => (m.modules as { key: string }).key as ModuleKey);
   }, []);
 
-  // Set active business
+  // Fetch active business from profile
+  const fetchActiveBusinessFromProfile = useCallback(async (): Promise<string | null> => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('active_business_id')
+      .eq('id', user?.id)
+      .single();
+
+    if (error || !data) {
+      return null;
+    }
+
+    return data.active_business_id;
+  }, [user?.id]);
+
+  // Set active business (persists to DB and localStorage)
   const handleSetActiveBusiness = useCallback(async (businessId: string) => {
     const business = userBusinesses.find((b) => b.id === businessId);
     if (!business) {
@@ -111,9 +132,17 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // Update local state immediately
     setActiveBusinessId(businessId);
     setActiveBusinessState(business);
     localStorage.setItem(ACTIVE_BUSINESS_KEY, businessId);
+
+    // Persist to database via RPC
+    try {
+      await supabase.rpc('set_active_business', { _business_id: businessId });
+    } catch (error) {
+      console.error('Error persisting active business:', error);
+    }
 
     // Fetch enabled modules
     const modules = await fetchBusinessModules(businessId);
@@ -178,27 +207,41 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       const businesses = await fetchUserBusinesses(user.id);
       setUserBusinesses(businesses);
 
-      // Try to restore active business from localStorage
-      const storedBusinessId = localStorage.getItem(ACTIVE_BUSINESS_KEY);
-      const storedBusiness = businesses.find((b) => b.id === storedBusinessId);
+      // Try to restore active business: 1) from DB profile, 2) from localStorage, 3) auto-select if only one
+      let activeId: string | null = null;
+      
+      // First, try to get from profile (DB source of truth)
+      const profileActiveId = await fetchActiveBusinessFromProfile();
+      if (profileActiveId && businesses.find((b) => b.id === profileActiveId)) {
+        activeId = profileActiveId;
+      }
 
-      if (storedBusiness) {
-        setActiveBusinessId(storedBusiness.id);
-        setActiveBusinessState(storedBusiness);
-        const modules = await fetchBusinessModules(storedBusiness.id);
-        setEnabledModules(modules);
-      } else if (businesses.length === 1) {
-        // Auto-select if only one business
-        setActiveBusinessId(businesses[0].id);
-        setActiveBusinessState(businesses[0]);
-        localStorage.setItem(ACTIVE_BUSINESS_KEY, businesses[0].id);
-        const modules = await fetchBusinessModules(businesses[0].id);
+      // Fallback to localStorage
+      if (!activeId) {
+        const storedBusinessId = localStorage.getItem(ACTIVE_BUSINESS_KEY);
+        if (storedBusinessId && businesses.find((b) => b.id === storedBusinessId)) {
+          activeId = storedBusinessId;
+        }
+      }
+
+      // Auto-select if only one business
+      if (!activeId && businesses.length === 1) {
+        activeId = businesses[0].id;
+      }
+
+      if (activeId) {
+        const activeBiz = businesses.find((b) => b.id === activeId)!;
+        setActiveBusinessId(activeId);
+        setActiveBusinessState(activeBiz);
+        localStorage.setItem(ACTIVE_BUSINESS_KEY, activeId);
+        
+        const modules = await fetchBusinessModules(activeId);
         setEnabledModules(modules);
       }
     };
 
     loadBusinesses();
-  }, [user, fetchUserBusinesses, fetchBusinessModules]);
+  }, [user, fetchUserBusinesses, fetchBusinessModules, fetchActiveBusinessFromProfile]);
 
   const value: BusinessContextType = {
     user,
