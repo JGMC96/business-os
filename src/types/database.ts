@@ -199,3 +199,30 @@ export interface BusinessModuleWithKey extends BusinessModule {
 export interface InvoiceWithClient extends Invoice {
   client_name?: string;
 }
+
+// Payment with joined invoice info for display
+export interface PaymentWithInvoice extends Payment {
+  invoice_number?: string;
+  invoice_total?: number;
+}
+
+// Invoice info for payment form selector
+export interface InvoiceForPayment {
+  id: string;
+  invoice_number: string;
+  total: number;
+  status: InvoiceStatus;
+  due_date: string | null;
+  client_name?: string;
+  total_paid: number;
+  pending: number;
+}
+
+// Data for creating a new payment
+export interface CreatePaymentData {
+  invoice_id: string;
+  amount: number;
+  payment_method?: string;
+  payment_date: string;
+  notes?: string;
+}
