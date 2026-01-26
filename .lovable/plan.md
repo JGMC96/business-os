@@ -1,346 +1,363 @@
 
-# Plan: Página de Configuración Completa
+# Plan: Implementar Módulo Retail Completo
 
 ## Resumen
 
-Crear una página de configuración integral con 4 secciones organizadas en tabs:
-1. **Mi Perfil** - Datos personales del usuario
-2. **Mi Negocio** - Información del negocio activo
-3. **Mi Rol** - Visualización del rol y permisos
-4. **Facturación** - Configuración de prefijos, IVA y numeración
+Crear un módulo de **Retail/Punto de Venta** que permita registrar ventas rápidas, gestionar inventario básico y ver tickets de venta. El módulo será exclusivo para planes **Pro** y **Business**.
 
 ---
 
-## Diseño Visual
+## Arquitectura del Sistema Actual
 
-La página usará el componente `Tabs` de Radix UI con cards para cada sección, siguiendo el estilo visual existente (Inter + Plus Jakarta Sans, Deep Blue/Teal palette).
+El sistema ya tiene una arquitectura modular robusta:
+
+```text
+modules (catálogo)
+    ↓
+plan_modules (qué módulos incluye cada plan)
+    ↓
+business_modules (qué módulos tiene habilitado cada negocio)
+    ↓
+enabledModules[] (contexto React para UI gating)
+```
+
+---
+
+## Fases de Implementación
+
+### Fase 1: Backend (Base de Datos)
+
+| Cambio | Descripción |
+|--------|-------------|
+| Insertar módulo `retail` | En tabla `modules` |
+| Asociar a planes Pro/Business | En tabla `plan_modules` |
+| Agregar `stock_quantity` a `products` | Para control de inventario |
+| Crear tabla `sales` | Ventas/tickets de POS |
+| Crear tabla `sale_items` | Líneas de cada venta |
+| Crear RLS policies | Seguridad multi-tenant |
+
+### Fase 2: Frontend (Tipos y Contexto)
+
+| Archivo | Cambio |
+|---------|--------|
+| `src/types/database.ts` | Agregar `retail` a `ModuleKey` |
+| `src/components/auth/RequireModule.tsx` | Agregar nombre "Retail" al mapa |
+
+### Fase 3: UI del Módulo
+
+| Archivo | Descripción |
+|---------|-------------|
+| `src/pages/dashboard/Retail.tsx` | Página principal con tabs |
+| `src/components/retail/POSPanel.tsx` | Panel de venta rápida (cart) |
+| `src/components/retail/SalesHistory.tsx` | Historial de ventas |
+| `src/components/retail/InventoryView.tsx` | Vista de stock |
+| `src/hooks/useRetailSales.ts` | Hook para CRUD de ventas |
+| `src/hooks/useInventory.ts` | Hook para stock de productos |
+
+### Fase 4: Integración
+
+| Archivo | Cambio |
+|---------|--------|
+| `src/components/dashboard/DashboardSidebar.tsx` | Agregar item "Retail" |
+| `src/pages/Dashboard.tsx` | Agregar ruta `/retail/*` |
+
+---
+
+## Detalle: Migración de Base de Datos
+
+### 1. Insertar módulo retail
+
+```sql
+INSERT INTO modules (key, name, description, display_order, is_active)
+VALUES ('retail', 'Retail / POS', 'Punto de venta y control de inventario', 7, true);
+```
+
+### 2. Asociar a planes Pro y Business
+
+```sql
+-- Obtener IDs dinámicamente
+INSERT INTO plan_modules (plan_id, module_id, limits)
+SELECT p.id, m.id, '{}'::jsonb
+FROM plans p, modules m
+WHERE p.key IN ('pro', 'business') AND m.key = 'retail';
+```
+
+### 3. Agregar stock a products
+
+```sql
+ALTER TABLE products 
+ADD COLUMN stock_quantity integer DEFAULT 0,
+ADD COLUMN track_inventory boolean DEFAULT false;
+```
+
+### 4. Crear tabla sales
+
+```sql
+CREATE TABLE sales (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  sale_number text NOT NULL,
+  client_id uuid REFERENCES clients(id) ON DELETE SET NULL,
+  subtotal numeric NOT NULL DEFAULT 0,
+  tax numeric NOT NULL DEFAULT 0,
+  total numeric NOT NULL DEFAULT 0,
+  payment_method text,
+  notes text,
+  created_by uuid REFERENCES auth.users(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Índices
+CREATE INDEX idx_sales_business_id ON sales(business_id);
+CREATE INDEX idx_sales_created_at ON sales(created_at DESC);
+
+-- RLS
+ALTER TABLE sales ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Members can view sales"
+  ON sales FOR SELECT
+  USING (is_member_of_business(business_id));
+
+CREATE POLICY "Members can create sales"
+  ON sales FOR INSERT
+  WITH CHECK (is_member_of_business(business_id));
+
+CREATE POLICY "Owner/Admin can delete sales"
+  ON sales FOR DELETE
+  USING (has_min_role(business_id, 'admin'));
+```
+
+### 5. Crear tabla sale_items
+
+```sql
+CREATE TABLE sale_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  sale_id uuid NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+  product_id uuid REFERENCES products(id) ON DELETE SET NULL,
+  product_name text NOT NULL,
+  quantity numeric NOT NULL DEFAULT 1,
+  unit_price numeric NOT NULL DEFAULT 0,
+  total numeric NOT NULL DEFAULT 0
+);
+
+-- RLS (hereda de sales)
+ALTER TABLE sale_items ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Members can view sale items"
+  ON sale_items FOR SELECT
+  USING (EXISTS (
+    SELECT 1 FROM sales 
+    WHERE sales.id = sale_items.sale_id 
+    AND is_member_of_business(sales.business_id)
+  ));
+
+CREATE POLICY "Members can manage sale items"
+  ON sale_items FOR ALL
+  USING (EXISTS (
+    SELECT 1 FROM sales 
+    WHERE sales.id = sale_items.sale_id 
+    AND is_member_of_business(sales.business_id)
+  ));
+```
+
+### 6. Trigger para decrementar stock (opcional pero recomendado)
+
+```sql
+CREATE OR REPLACE FUNCTION decrement_stock_on_sale()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE products
+  SET stock_quantity = stock_quantity - NEW.quantity
+  WHERE id = NEW.product_id 
+    AND track_inventory = true;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER trigger_decrement_stock
+AFTER INSERT ON sale_items
+FOR EACH ROW EXECUTE FUNCTION decrement_stock_on_sale();
+```
+
+---
+
+## Detalle: Tipos TypeScript
+
+### Actualizar `ModuleKey`
+
+```typescript
+export type ModuleKey = 
+  | 'clients' 
+  | 'products' 
+  | 'invoicing' 
+  | 'payments' 
+  | 'ai_advisor' 
+  | 'reports'
+  | 'retail';  // NUEVO
+```
+
+### Nuevas interfaces
+
+```typescript
+export interface Sale {
+  id: string;
+  business_id: string;
+  sale_number: string;
+  client_id: string | null;
+  subtotal: number;
+  tax: number;
+  total: number;
+  payment_method: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface SaleItem {
+  id: string;
+  sale_id: string;
+  product_id: string | null;
+  product_name: string;
+  quantity: number;
+  unit_price: number;
+  total: number;
+}
+
+export interface SaleWithItems extends Sale {
+  items: SaleItem[];
+  client_name?: string;
+}
+
+export interface ProductWithStock extends Product {
+  stock_quantity: number;
+  track_inventory: boolean;
+}
+```
+
+---
+
+## Detalle: UI del Módulo Retail
+
+### Estructura de Retail.tsx
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│  Configuración                                              │
+│  Retail / Punto de Venta                                    │
 ├─────────────────────────────────────────────────────────────┤
-│  [Mi Perfil] [Mi Negocio] [Mi Rol] [Facturación]           │
+│  [Nueva Venta] [Historial] [Inventario]                     │
 ├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │  Card con formulario de la sección activa           │   │
-│  │                                                      │   │
-│  │  [Avatar/Logo]                                       │   │
-│  │  [Campos editables]                                  │   │
-│  │                                                      │   │
-│  │  [Guardar cambios]                                   │   │
-│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  Tab: Nueva Venta                                           │
+│  ┌──────────────────────┐  ┌──────────────────────────┐    │
+│  │ Buscar producto...   │  │ Carrito                  │    │
+│  ├──────────────────────┤  ├──────────────────────────┤    │
+│  │ [Producto 1] $100    │  │ Producto A  x2   $200   │    │
+│  │ [Producto 2] $250    │  │ Producto B  x1   $250   │    │
+│  │ [Producto 3] $75     │  │                          │    │
+│  │ ...                  │  │ Subtotal:        $450   │    │
+│  │                      │  │ IVA (16%):       $72    │    │
+│  │                      │  │ ─────────────────────── │    │
+│  │                      │  │ TOTAL:           $522   │    │
+│  │                      │  │                          │    │
+│  │                      │  │ [Efectivo] [Tarjeta]    │    │
+│  │                      │  │ [Cobrar $522]            │    │
+│  └──────────────────────┘  └──────────────────────────┘    │
+│                                                             │
+│  Tab: Historial                                             │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │ # Venta    │ Fecha       │ Cliente  │ Total │ Método │  │
+│  │ VTA-0001   │ Hace 5 min  │ Mostrador│ $522  │ Efect. │  │
+│  │ VTA-0002   │ Hoy 10:30   │ Juan P.  │ $1200 │ Tarjeta│  │
+│  └──────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Tab: Inventario                                            │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │ Producto    │ Precio  │ Stock │ Tracking │ Acciones  │  │
+│  │ Producto A  │ $100    │ 50    │ ✓        │ [Ajustar] │  │
+│  │ Producto B  │ $250    │ 12    │ ✓        │ [Ajustar] │  │
+│  │ Servicio X  │ $500    │ -     │ ✗        │ -         │  │
+│  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Detalle: Sidebar y Rutas
+
+### DashboardSidebar.tsx
+
+Agregar al array `menuItems`:
+
+```typescript
+{ 
+  icon: ShoppingCart, 
+  label: "Retail", 
+  path: "/dashboard/retail", 
+  moduleKey: "retail" 
+}
+```
+
+### Dashboard.tsx
+
+Agregar ruta:
+
+```tsx
+<Route path="retail/*" element={<Retail />} />
 ```
 
 ---
 
 ## Archivos a Crear/Modificar
 
-| Archivo | Acción | Descripción |
+| Archivo | Acción | Líneas Est. |
 |---------|--------|-------------|
-| `src/pages/dashboard/Settings.tsx` | Crear | Página principal con tabs |
-| `src/components/settings/ProfileSettings.tsx` | Crear | Formulario Mi Perfil |
-| `src/components/settings/BusinessSettings.tsx` | Crear | Formulario Mi Negocio |
-| `src/components/settings/RoleSettings.tsx` | Crear | Vista Mi Rol |
-| `src/components/settings/BillingSettings.tsx` | Crear | Formulario Facturación |
-| `src/hooks/useProfileSettings.ts` | Crear | Hook para perfil de usuario |
-| `src/pages/Dashboard.tsx` | Modificar | Reemplazar placeholder por Settings |
+| Migración SQL | Ejecutar | ~80 SQL |
+| `src/types/database.ts` | Modificar | +40 |
+| `src/components/auth/RequireModule.tsx` | Modificar | +1 |
+| `src/components/dashboard/DashboardSidebar.tsx` | Modificar | +2 |
+| `src/pages/Dashboard.tsx` | Modificar | +2 |
+| `src/pages/dashboard/Retail.tsx` | Crear | ~100 |
+| `src/components/retail/POSPanel.tsx` | Crear | ~250 |
+| `src/components/retail/SalesHistory.tsx` | Crear | ~120 |
+| `src/components/retail/InventoryView.tsx` | Crear | ~150 |
+| `src/hooks/useRetailSales.ts` | Crear | ~100 |
+| `src/hooks/useInventory.ts` | Crear | ~80 |
+
+**Total estimado: ~12 archivos, ~900 líneas**
 
 ---
 
-## Detalles por Sección
+## Flujo de Venta (POS)
 
-### 1. Mi Perfil (`ProfileSettings.tsx`)
-
-**Campos editables:**
-- Nombre completo (`full_name`)
-- Avatar URL (`avatar_url`) - Input de texto (futuro: upload)
-
-**Fuente de datos:** Tabla `profiles`
-
-**Permisos:** Cualquier usuario autenticado puede editar su propio perfil
-
-**Formulario con Zod:**
-```typescript
-const profileSchema = z.object({
-  full_name: z.string().min(2, 'Mínimo 2 caracteres').max(100),
-  avatar_url: z.string().url('URL inválida').optional().or(z.literal('')),
-});
-```
-
-**Hook `useProfileSettings`:**
-```typescript
-interface UseProfileSettingsReturn {
-  profile: { full_name: string | null; avatar_url: string | null } | null;
-  isLoading: boolean;
-  updateProfile: (data: ProfileFormData) => Promise<boolean>;
-  isUpdating: boolean;
-}
-```
-
----
-
-### 2. Mi Negocio (`BusinessSettings.tsx`)
-
-**Campos editables (solo owner/admin):**
-- Nombre del negocio (`name`)
-- Industria (`industry`) - Select con opciones
-- Moneda (`currency`) - Select (MXN, USD, EUR)
-- Zona horaria (`timezone`) - Select
-- Logo URL (`logo_url`) - Input texto
-
-**Fuente de datos:** Tabla `businesses` via `activeBusiness` del contexto
-
-**Permisos:** Solo `owner` y `admin` pueden editar (usando `useRoleAccess`)
-
-**Formulario con Zod:**
-```typescript
-const businessSchema = z.object({
-  name: z.string().min(2, 'Nombre requerido').max(100),
-  industry: z.string().optional(),
-  currency: z.enum(['MXN', 'USD', 'EUR']),
-  timezone: z.string(),
-  logo_url: z.string().url().optional().or(z.literal('')),
-});
-```
-
-**Validación de permisos:**
-```typescript
-const { isAdmin } = useRoleAccess('admin');
-// Si !isAdmin, mostrar campos como read-only
-```
-
----
-
-### 3. Mi Rol (`RoleSettings.tsx`)
-
-**Vista informativa (no editable):**
-- Badge con rol actual (Owner / Admin / Staff)
-- Fecha de ingreso (`joined_at`)
-- Descripción de permisos según rol
-
-**Permisos por rol:**
-
-| Rol | Permisos |
-|-----|----------|
-| Owner | Control total, eliminar negocio, gestionar suscripción |
-| Admin | Gestionar miembros, configuración, eliminar registros |
-| Staff | Crear/editar clientes, productos, facturas, pagos |
-
-**Fuente de datos:** `userRole` y `activeBusiness` del contexto
-
----
-
-### 4. Configuración de Facturación (`BillingSettings.tsx`)
-
-**Campos editables (solo owner/admin):**
-- Prefijo de factura (`invoice_prefix`) - ej: "FAC-"
-- Próximo número (`next_invoice_number`) - read-only info
-- Tasa de IVA (`tax_rate`) - número 0-100
-
-**Fuente de datos:** Tabla `business_settings` via `useBusinessSettings`
-
-**Formulario con Zod:**
-```typescript
-const billingSchema = z.object({
-  invoice_prefix: z.string().max(10, 'Máximo 10 caracteres'),
-  tax_rate: z.number().min(0).max(100),
-});
-```
-
-**Hook actualizado `useBusinessSettings`:**
-Agregar función `updateSettings(data)` para guardar cambios.
-
----
-
-## Estructura de Componentes
-
-```text
-Settings.tsx
-├── Header con título
-└── Tabs
-    ├── TabsTrigger: Mi Perfil
-    ├── TabsTrigger: Mi Negocio
-    ├── TabsTrigger: Mi Rol
-    └── TabsTrigger: Facturación
-    │
-    ├── TabsContent: ProfileSettings
-    │   └── Card con formulario
-    ├── TabsContent: BusinessSettings
-    │   └── Card con formulario (o read-only si !isAdmin)
-    ├── TabsContent: RoleSettings
-    │   └── Card con info de rol
-    └── TabsContent: BillingSettings
-        └── Card con formulario
-```
-
----
-
-## Integración con Dashboard.tsx
-
-**Cambio en línea 53:**
-```typescript
-// Antes
-<Route path="settings/*" element={<SettingsPlaceholder />} />
-
-// Después
-<Route path="settings/*" element={<Settings />} />
-```
-
-**Eliminar el componente `SettingsPlaceholder` (líneas 15-21).**
-
----
-
-## Hook useProfileSettings.ts
-
-```typescript
-export function useProfileSettings() {
-  const { user } = useBusiness();
-  const [profile, setProfile] = useState<ProfileData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isUpdating, setIsUpdating] = useState(false);
-
-  // Fetch profile on mount
-  useEffect(() => {
-    if (!user) return;
-    
-    supabase
-      .from('profiles')
-      .select('full_name, avatar_url')
-      .eq('id', user.id)
-      .single()
-      .then(({ data }) => setProfile(data))
-      .finally(() => setIsLoading(false));
-  }, [user]);
-
-  // Update profile
-  const updateProfile = async (data: ProfileFormData) => {
-    setIsUpdating(true);
-    const { error } = await supabase
-      .from('profiles')
-      .update({ 
-        full_name: data.full_name,
-        avatar_url: data.avatar_url || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', user?.id);
-    
-    setIsUpdating(false);
-    if (error) {
-      toast.error('Error al guardar perfil');
-      return false;
-    }
-    toast.success('Perfil actualizado');
-    return true;
-  };
-
-  return { profile, isLoading, updateProfile, isUpdating };
-}
-```
-
----
-
-## Actualización de useBusinessSettings.ts
-
-Agregar función `updateSettings`:
-
-```typescript
-const updateSettings = async (data: Partial<BusinessSettings>) => {
-  if (!activeBusinessId) return false;
-  
-  const { error } = await supabase
-    .from('business_settings')
-    .update({
-      ...data,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('business_id', activeBusinessId);
-    
-  if (error) {
-    toast.error('Error al guardar configuración');
-    return false;
-  }
-  
-  // Refetch
-  fetchSettings();
-  toast.success('Configuración guardada');
-  return true;
-};
-```
-
----
-
-## Validación de Permisos
-
-| Sección | Quién puede ver | Quién puede editar |
-|---------|-----------------|-------------------|
-| Mi Perfil | Todos | El propio usuario |
-| Mi Negocio | Todos | Owner, Admin |
-| Mi Rol | Todos | Nadie (solo vista) |
-| Facturación | Todos | Owner, Admin |
-
-Para secciones no editables, mostrar campos con `disabled` y mensaje informativo.
-
----
-
-## UI de Formularios
-
-Cada formulario seguirá el patrón de `ClientFormDialog`:
-- React Hook Form + Zod resolver
-- FormField con Label, Input/Select, FormMessage
-- Button de submit con estado loading
-- Toast de éxito/error
-
----
-
-## Ejemplo Visual: Tab "Mi Perfil"
-
-```text
-┌─────────────────────────────────────────────┐
-│  Mi Perfil                                  │
-│  Información personal de tu cuenta          │
-├─────────────────────────────────────────────┤
-│                                             │
-│  [Avatar circular con inicial]              │
-│                                             │
-│  Email: usuario@email.com (no editable)     │
-│                                             │
-│  Nombre completo *                          │
-│  ┌─────────────────────────────────────┐   │
-│  │ Juan Pérez                           │   │
-│  └─────────────────────────────────────┘   │
-│                                             │
-│  URL de avatar (opcional)                   │
-│  ┌─────────────────────────────────────┐   │
-│  │ https://...                          │   │
-│  └─────────────────────────────────────┘   │
-│                                             │
-│               [Guardar cambios]             │
-└─────────────────────────────────────────────┘
-```
+1. Usuario abre **Nueva Venta**
+2. Busca/selecciona productos → se agregan al carrito
+3. Ajusta cantidades si es necesario
+4. Selecciona método de pago (Efectivo/Tarjeta/Transferencia)
+5. Click en **Cobrar**
+6. Sistema:
+   - Crea registro en `sales`
+   - Crea registros en `sale_items`
+   - Trigger decrementa `stock_quantity` (si `track_inventory = true`)
+7. Muestra ticket/confirmación
+8. Venta aparece en Historial
 
 ---
 
 ## Consideraciones de Seguridad
 
-- RLS existente protege `profiles` (solo el usuario puede editar su propio perfil)
-- RLS existente protege `businesses` (solo owner/admin pueden UPDATE)
-- RLS existente protege `business_settings` (solo owner/admin pueden UPDATE)
-- El frontend valida roles con `useRoleAccess` pero la seguridad real está en RLS
+- RLS en `sales` y `sale_items` usa `is_member_of_business()`
+- Solo Owner/Admin pueden eliminar ventas
+- El trigger de stock usa `SECURITY DEFINER` para bypass seguro
+- Módulo solo visible si `retail` está en `enabledModules`
 
 ---
 
-## Archivos Finales
+## Orden de Ejecución
 
-| Archivo | Líneas estimadas |
-|---------|------------------|
-| `src/pages/dashboard/Settings.tsx` | ~80 |
-| `src/components/settings/ProfileSettings.tsx` | ~120 |
-| `src/components/settings/BusinessSettings.tsx` | ~150 |
-| `src/components/settings/RoleSettings.tsx` | ~80 |
-| `src/components/settings/BillingSettings.tsx` | ~120 |
-| `src/hooks/useProfileSettings.ts` | ~60 |
-| `src/hooks/useBusinessSettings.ts` (modificar) | +30 |
-| `src/pages/Dashboard.tsx` (modificar) | -10, +3 |
-
-**Total: ~7 archivos, ~650 líneas de código**
+1. **Migración SQL** (módulo + tablas + RLS)
+2. **Tipos TypeScript** (ModuleKey + interfaces)
+3. **Hooks** (useRetailSales, useInventory)
+4. **Componentes** (POSPanel, SalesHistory, InventoryView)
+5. **Página Retail.tsx**
+6. **Integración** (Sidebar + Dashboard routes)
+7. **Pruebas** (crear venta, verificar stock, ver historial)
