@@ -1,357 +1,252 @@
 
-
-# Plan: Modulo de Facturas (MVP)
+# Plan: Modulo de Pagos (MVP)
 
 ## Resumen
 
-Implementacion del modulo completo de Facturas siguiendo el patron establecido en Clientes/Productos, con generacion atomica de numero de factura via RPC, gestion de lineas (invoice_items), y feature gating.
+Implementacion del modulo de Pagos siguiendo los patrones establecidos en Clientes/Productos/Facturas. El objetivo principal es cerrar el ciclo del dinero: registrar pagos contra facturas y actualizar automaticamente el estado de la factura (paid cuando total pagado >= total factura).
 
 ---
 
 ## Estado Actual Verificado
 
 ### Base de Datos
-- **Tabla `invoices`**: Existe con campos: id, business_id, client_id, invoice_number, status, subtotal, tax, total, due_date, notes, created_by, created_at, updated_at
-- **Tabla `invoice_items`**: Existe con campos: id, invoice_id, product_id (nullable), description, quantity, unit_price, total
-- **Tabla `business_settings`**: Existe con tax_rate (default 16.00)
-- **RPC `generate_invoice_number`**: Existe y usa FOR UPDATE locks para atomicidad
-- **Enum `invoice_status`**: draft, sent, paid, overdue, cancelled
-
-### Sidebar
-- **Toast import**: Correcto, usa `import { toast } from "sonner"` (linea 19 de DashboardSidebar.tsx)
-- **Ruta**: `/dashboard/invoices` ya existe como placeholder (LockedModulePage)
+- **Tabla `payments`**: Existe con campos: id, business_id, invoice_id (nullable FK), amount, payment_method, payment_date, notes, created_by, created_at, updated_at
+- **RLS policies**: Ya existen para SELECT, INSERT, UPDATE (members) y DELETE (admin/owner)
+- **Tabla `invoices`**: Campos relevantes: id, business_id, total, status, due_date, paid_at
 
 ### Patrones Establecidos
-- useClients/useProducts con requestIdRef para race conditions
-- sanitizeSearchTerm para filtros seguros
+- `useClients`/`useInvoices`: requestIdRef para race conditions
+- `sanitizeSearchTerm` para filtros seguros
 - Zod + react-hook-form para validacion
-- No delete real (solo status changes)
+- No delete real (solo soft delete/status changes)
+- Dialog pattern para formularios (ClientFormDialog)
+
+### Routing Actual
+- `/dashboard/payments/*` apunta a `LockedModulePage` (placeholder)
+- Sidebar ya tiene entry para "Pagos" con moduleKey "payments"
 
 ---
 
 ## Arquitectura del Modulo
 
 ```text
-/dashboard/invoices
+/dashboard/payments
     |
-    +-- Invoices.tsx (contenedor con Routes)
+    +-- Payments.tsx (contenedor con RequireModule)
          |
-         +-- /dashboard/invoices (InvoicesList)
-         |   +-- InvoicesHeader.tsx
-         |   +-- InvoicesTable.tsx
-         |
-         +-- /dashboard/invoices/new (NewInvoicePage)
-              +-- InvoiceForm.tsx
-              +-- InvoiceLineItem.tsx (componente de linea)
+         +-- /dashboard/payments (PaymentsList)
+         |   +-- PaymentsHeader.tsx
+         |   +-- PaymentsTable.tsx
+         |   +-- PaymentFormDialog.tsx
 ```
 
 ---
 
-## Fase 1: Hook useInvoices
+## Fase 1: Hook usePayments
 
-### Archivo: `src/hooks/useInvoices.ts`
+### Archivo: `src/hooks/usePayments.ts`
 
 **Responsabilidades:**
-1. Fetch invoices con join a clients para mostrar nombre
+1. Fetch payments con join a invoices para mostrar numero de factura
 2. Race condition protection con requestIdRef
-3. Generar numero de factura via RPC
-4. Crear factura con items (transaccion "manual")
-5. Actualizar status (no delete)
+3. Crear pago y recalcular estado de factura
+4. Fetch facturas disponibles para el selector
 
 **Interface:**
 ```typescript
-interface InvoiceWithClient extends Invoice {
-  client_name?: string;
+interface PaymentWithInvoice extends Payment {
+  invoice_number?: string;
+  invoice_total?: number;
 }
 
-interface InvoiceItemInput {
-  product_id?: string;
-  description: string;
-  quantity: number;
-  unit_price: number;
-}
-
-interface CreateInvoiceData {
-  client_id: string;
-  due_date?: string;
+interface CreatePaymentData {
+  invoice_id: string;
+  amount: number;
+  payment_method?: string;
+  payment_date: string;
   notes?: string;
-  items: InvoiceItemInput[];
 }
 
-interface UseInvoicesReturn {
-  invoices: InvoiceWithClient[];
+interface UsePaymentsReturn {
+  payments: PaymentWithInvoice[];
   isLoading: boolean;
   error: Error | null;
   searchTerm: string;
   setSearchTerm: (term: string) => void;
-  statusFilter: InvoiceStatus | 'all';
-  setStatusFilter: (status: InvoiceStatus | 'all') => void;
-  fetchInvoices: () => Promise<void>;
-  generateInvoiceNumber: () => Promise<string | null>;
-  createInvoice: (data: CreateInvoiceData) => Promise<boolean>;
-  updateInvoiceStatus: (id: string, status: InvoiceStatus) => Promise<boolean>;
-  getBusinessSettings: () => Promise<{ tax_rate: number } | null>;
+  fetchPayments: () => Promise<void>;
+  createPayment: (data: CreatePaymentData) => Promise<boolean>;
+  fetchPayableInvoices: () => Promise<InvoiceForPayment[]>;
 }
 ```
 
-**Logica clave de creacion:**
+**Logica clave de creacion + recalculo:**
 ```typescript
-// 1. Numero ya generado en el form (se pasa como parametro o se genera al cargar /new)
-// 2. Calcular totals
-const subtotal = items.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0);
-const tax = subtotal * (taxRate / 100);
-const total = subtotal + tax;
+const createPayment = async (data: CreatePaymentData): Promise<boolean> => {
+  // 1. Insert payment
+  const { error: paymentError } = await supabase
+    .from('payments')
+    .insert({
+      business_id: activeBusinessId,
+      invoice_id: data.invoice_id,
+      amount: data.amount,
+      payment_method: data.payment_method || null,
+      payment_date: data.payment_date,
+      notes: data.notes || null,
+      created_by: user.id,
+    });
 
-// 3. Insert invoice
-const { data: invoice, error: invoiceError } = await supabase
-  .from('invoices')
-  .insert({
-    business_id: activeBusinessId,
-    client_id: data.client_id,
-    invoice_number: invoiceNumber,
-    status: 'draft',
-    subtotal,
-    tax,
-    total,
-    due_date: data.due_date || null,
-    notes: data.notes || null,
-    created_by: user.id,
-  })
-  .select('id')
-  .single();
+  if (paymentError) throw paymentError;
 
-// 4. Insert items
-const itemsToInsert = data.items.map(item => ({
-  invoice_id: invoice.id,
-  product_id: item.product_id || null,
-  description: item.description,
-  quantity: item.quantity,
-  unit_price: item.unit_price,
-  total: item.quantity * item.unit_price,
-}));
+  // 2. Recalcular estado de la factura
+  await recalculateInvoiceStatus(data.invoice_id);
 
-await supabase.from('invoice_items').insert(itemsToInsert);
+  toast({ title: 'Pago registrado' });
+  await fetchPayments();
+  return true;
+};
+
+const recalculateInvoiceStatus = async (invoiceId: string) => {
+  // Obtener total de la factura
+  const { data: invoice } = await supabase
+    .from('invoices')
+    .select('id, total, status, due_date')
+    .eq('id', invoiceId)
+    .eq('business_id', activeBusinessId)
+    .single();
+
+  if (!invoice) return;
+
+  // No tocar draft/cancelled
+  if (invoice.status === 'draft' || invoice.status === 'cancelled') {
+    return;
+  }
+
+  // Sumar todos los pagos de esta factura
+  const { data: payments } = await supabase
+    .from('payments')
+    .select('amount')
+    .eq('invoice_id', invoiceId)
+    .eq('business_id', activeBusinessId);
+
+  const totalPaid = (payments || []).reduce((sum, p) => sum + Number(p.amount), 0);
+
+  // Determinar nuevo estado
+  let newStatus: InvoiceStatus;
+  const updateData: Record<string, unknown> = {};
+
+  if (totalPaid >= invoice.total) {
+    newStatus = 'paid';
+    updateData.paid_at = new Date().toISOString();
+  } else if (invoice.due_date && new Date(invoice.due_date) < new Date()) {
+    newStatus = 'overdue';
+  } else {
+    newStatus = 'sent';
+  }
+
+  updateData.status = newStatus;
+
+  await supabase
+    .from('invoices')
+    .update(updateData)
+    .eq('id', invoiceId)
+    .eq('business_id', activeBusinessId);
+};
 ```
 
 ---
 
-## Fase 2: Hook useBusinessSettings
+## Fase 2: Componentes UI
 
-### Archivo: `src/hooks/useBusinessSettings.ts`
-
-**Responsabilidades:**
-- Obtener tax_rate del negocio activo
-- Cache simple para no re-fetch innecesario
-
-```typescript
-export function useBusinessSettings() {
-  const { activeBusinessId } = useBusiness();
-  const [settings, setSettings] = useState<BusinessSettings | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    if (!activeBusinessId) return;
-    
-    const fetchSettings = async () => {
-      const { data } = await supabase
-        .from('business_settings')
-        .select('*')
-        .eq('business_id', activeBusinessId)
-        .single();
-      
-      setSettings(data);
-      setIsLoading(false);
-    };
-    
-    fetchSettings();
-  }, [activeBusinessId]);
-
-  return { settings, isLoading };
-}
-```
-
----
-
-## Fase 3: Componentes de Listado
-
-### 3.1 InvoicesHeader.tsx
+### 2.1 PaymentsHeader.tsx
 
 **Props:**
 - searchTerm, onSearchChange
-- statusFilter, onStatusFilterChange
-- onNewInvoice
+- onNewPayment
 
 **UI:**
-- Titulo "Facturas"
-- Input de busqueda (por numero o cliente)
-- Select de status (Todos, Borrador, Enviada, Pagada, Vencida, Cancelada)
-- Boton "Nueva factura"
+- Titulo "Pagos"
+- Input de busqueda (placeholder "Buscar por numero de factura...")
+- Boton "Nuevo pago"
 
-### 3.2 InvoicesTable.tsx
+### 2.2 PaymentsTable.tsx
 
 **Columnas:**
 | Columna | Contenido |
 |---------|-----------|
-| Numero | invoice_number |
-| Cliente | client_name (join) |
-| Total | total formateado |
-| Estado | Badge con color por status |
-| Fecha | created_at formateado |
-| Vencimiento | due_date (o "-") |
-| Acciones | Menu dropdown |
+| Fecha | payment_date formateado |
+| Factura | invoice_number (join) |
+| Monto | amount formateado como moneda |
+| Metodo | payment_method o "-" |
+| Notas | notes truncado o "-" |
+| Acciones | Ver factura (futuro) |
 
-**Colores de estado:**
+**Estados:**
+- Loading: skeleton rows
+- Empty: "Aun no hay pagos registrados" + CTA
+
+### 2.3 PaymentFormDialog.tsx
+
+**Form con Zod:**
 ```typescript
-const statusColors: Record<InvoiceStatus, string> = {
-  draft: 'secondary',
-  sent: 'default',
-  paid: 'success', // verde
-  overdue: 'destructive', // rojo
-  cancelled: 'outline',
-};
-
-const statusLabels: Record<InvoiceStatus, string> = {
-  draft: 'Borrador',
-  sent: 'Enviada',
-  paid: 'Pagada',
-  overdue: 'Vencida',
-  cancelled: 'Cancelada',
-};
-```
-
-**Acciones (contextuales por estado):**
-- Ver detalle (futuro)
-- Marcar como enviada (si draft)
-- Marcar como pagada (si sent/overdue)
-- Cancelar (si draft/sent)
-
----
-
-## Fase 4: Formulario de Creacion
-
-### 4.1 NewInvoicePage.tsx
-
-**Logica al montar:**
-```typescript
-useEffect(() => {
-  const init = async () => {
-    // 1. Generar numero de factura
-    const number = await generateInvoiceNumber();
-    setInvoiceNumber(number);
-    
-    // 2. Obtener tax_rate
-    const settings = await getBusinessSettings();
-    setTaxRate(settings?.tax_rate ?? 16);
-    
-    // 3. Cargar clientes activos
-    await fetchClients();
-    
-    // 4. Cargar productos activos (para selector)
-    await fetchProducts();
-  };
-  init();
-}, [activeBusinessId]);
-```
-
-### 4.2 InvoiceForm.tsx
-
-**Campos:**
-- **invoice_number**: Readonly, mostrado como referencia
-- **client_id**: Select con clientes activos del negocio
-- **due_date**: DatePicker opcional
-- **notes**: Textarea opcional
-- **items**: Array dinamico de lineas
-
-**Validacion Zod:**
-```typescript
-const invoiceSchema = z.object({
-  client_id: z.string().min(1, 'Selecciona un cliente'),
-  due_date: z.string().optional(),
+const paymentSchema = z.object({
+  invoice_id: z.string().min(1, 'Selecciona una factura'),
+  amount: z.coerce.number().positive('El monto debe ser mayor a 0'),
+  payment_method: z.string().optional(),
+  payment_date: z.string().min(1, 'La fecha es requerida'),
   notes: z.string().optional(),
-  items: z.array(z.object({
-    product_id: z.string().optional(),
-    description: z.string().min(1, 'La descripcion es requerida'),
-    quantity: z.coerce.number().positive('Cantidad debe ser mayor a 0'),
-    unit_price: z.coerce.number().min(0, 'Precio debe ser mayor o igual a 0'),
-  })).min(1, 'Agrega al menos una linea'),
 });
 ```
 
-### 4.3 InvoiceLineItem.tsx
-
-**Componente para cada linea:**
-```tsx
-interface LineItemProps {
-  index: number;
-  control: Control<FormValues>;
-  products: Product[];
-  onRemove: () => void;
-  canRemove: boolean;
-}
-
-// UI:
-// [Select Producto (opcional)] [Input Descripcion] [Input Qty] [Input Precio] [Total calculado] [X]
-```
+**Campos:**
+- **invoice_id**: Select con facturas disponibles (sent/overdue/paid)
+- **amount**: Input numerico
+- **payment_method**: Select opcional (Efectivo, Tarjeta, Transferencia, Otro)
+- **payment_date**: Input date (default: hoy)
+- **notes**: Textarea opcional
 
 **Comportamiento:**
-- Al seleccionar producto: autocompletar descripcion y precio
-- Total de linea = quantity * unit_price (calculado, no editable)
-- Boton X solo visible si hay mas de 1 linea
-
-### 4.4 Calculo de Totales en Tiempo Real
-
-```typescript
-// En el form, usar watch() de react-hook-form
-const items = watch('items');
-
-const calculations = useMemo(() => {
-  const subtotal = items.reduce((sum, item) => {
-    const qty = Number(item.quantity) || 0;
-    const price = Number(item.unit_price) || 0;
-    return sum + (qty * price);
-  }, 0);
-  
-  const tax = subtotal * (taxRate / 100);
-  const total = subtotal + tax;
-  
-  return { subtotal, tax, total };
-}, [items, taxRate]);
-```
+- Al seleccionar factura: mostrar info de la factura (total, ya pagado, pendiente)
+- Validar que amount > 0
 
 ---
 
-## Fase 5: Paginas y Routing
+## Fase 3: Pagina y Routing
 
-### 5.1 Invoices.tsx (Contenedor)
+### 3.1 Payments.tsx (Contenedor)
 
-```tsx
-export default function Invoices() {
+```typescript
+export default function Payments() {
   return (
-    <RequireModule module="invoicing">
-      <Routes>
-        <Route index element={<InvoicesList />} />
-        <Route path="new" element={<NewInvoicePage />} />
-        {/* Futuro: <Route path=":id" element={<InvoiceDetail />} /> */}
-      </Routes>
+    <RequireModule module="payments">
+      <PaymentsList />
     </RequireModule>
   );
 }
 ```
 
-### 5.2 Actualizar Dashboard.tsx
+### 3.2 PaymentsList.tsx
 
-Cambiar el placeholder actual por el modulo real:
+Integra:
+- PaymentsHeader
+- PaymentsTable
+- PaymentFormDialog
 
-```tsx
-// Antes:
-<Route path="invoices/*" element={
-  <LockedModulePage moduleName="Facturacion" moduleKey="invoicing" icon={FileText} />
+Estado:
+- dialogOpen: boolean
+- isSubmitting: boolean
+
+### 3.3 Actualizar Dashboard.tsx
+
+```typescript
+// Cambiar de:
+<Route path="payments/*" element={
+  <LockedModulePage moduleName="Pagos" moduleKey="payments" icon={CreditCard} />
 } />
 
-// Despues:
-import Invoices from "@/pages/dashboard/Invoices";
+// A:
+import Payments from "@/pages/dashboard/Payments";
 
-<Route path="invoices/*" element={<Invoices />} />
+<Route path="payments/*" element={<Payments />} />
 ```
 
 ---
@@ -360,52 +255,50 @@ import Invoices from "@/pages/dashboard/Invoices";
 
 | Archivo | Descripcion |
 |---------|-------------|
-| `src/hooks/useInvoices.ts` | Hook CRUD para facturas |
-| `src/hooks/useBusinessSettings.ts` | Hook para obtener tax_rate |
-| `src/pages/dashboard/Invoices.tsx` | Contenedor con subrutas |
-| `src/pages/dashboard/invoices/InvoicesList.tsx` | Listado de facturas |
-| `src/pages/dashboard/invoices/NewInvoicePage.tsx` | Pagina de creacion |
-| `src/components/invoices/InvoicesHeader.tsx` | Header con filtros |
-| `src/components/invoices/InvoicesTable.tsx` | Tabla de facturas |
-| `src/components/invoices/InvoiceForm.tsx` | Formulario completo |
-| `src/components/invoices/InvoiceLineItem.tsx` | Componente de linea |
+| `src/hooks/usePayments.ts` | Hook CRUD para pagos + recalculo de factura |
+| `src/pages/dashboard/Payments.tsx` | Contenedor con RequireModule |
+| `src/pages/dashboard/payments/PaymentsList.tsx` | Listado de pagos |
+| `src/components/payments/PaymentsHeader.tsx` | Header con busqueda |
+| `src/components/payments/PaymentsTable.tsx` | Tabla de pagos |
+| `src/components/payments/PaymentFormDialog.tsx` | Dialog para crear pago |
 
 ## Archivos a Modificar
 
 | Archivo | Cambio |
 |---------|--------|
 | `src/pages/Dashboard.tsx` | Reemplazar placeholder por modulo real |
-| `src/types/database.ts` | Agregar InvoiceWithClient type si no existe |
+| `src/types/database.ts` | Agregar PaymentWithInvoice y InvoiceForPayment types |
 
 ---
 
 ## Flujo de Usuario Completo
 
 ```text
-1. Usuario navega a /dashboard/invoices
+1. Usuario navega a /dashboard/payments
    -> RequireModule valida acceso
    -> Si no tiene modulo: muestra bloqueo
-   -> Si tiene: muestra InvoicesList
+   -> Si tiene: muestra PaymentsList
 
-2. Click "Nueva factura"
-   -> Navega a /dashboard/invoices/new
-   -> Al montar: genera numero via RPC
-   -> Carga clientes, productos, tax_rate
+2. Click "Nuevo pago"
+   -> Abre PaymentFormDialog
+   -> Carga facturas disponibles (sent/overdue, opcionalmente paid para abonos)
 
 3. Completa formulario
-   -> Selecciona cliente
-   -> Agrega lineas (producto opcional)
-   -> Ve totales en tiempo real
+   -> Selecciona factura
+   -> Ingresa monto
+   -> Ve info de factura (total, pagado, pendiente)
 
 4. Click "Guardar"
    -> Validacion Zod
-   -> Insert invoice + items
+   -> Insert payment
+   -> Recalcula estado factura
    -> Toast exito
-   -> Navega a listado
+   -> Cierra dialog
+   -> Refresca listado
 
 5. En listado
-   -> Ve nueva factura con status "Borrador"
-   -> Puede cambiar estado via menu
+   -> Ve nuevo pago con info de factura
+   -> Si el pago completo la factura, esa factura ahora tiene status "paid"
 ```
 
 ---
@@ -414,9 +307,34 @@ import Invoices from "@/pages/dashboard/Invoices";
 
 | Accion | Exito | Error |
 |--------|-------|-------|
-| Generar numero | - | "Error al generar numero de factura" |
-| Crear factura | "Factura creada" | "Error al crear factura" |
-| Cambiar estado | "Estado actualizado" | "Error al actualizar estado" |
+| Crear pago | "Pago registrado" | "Error al registrar pago" |
+| Cargar facturas | - | "Error al cargar facturas" |
+
+---
+
+## Formateo de Moneda
+
+```typescript
+const formatPrice = (amount: number) => {
+  return new Intl.NumberFormat('es-MX', {
+    style: 'currency',
+    currency: 'MXN',
+  }).format(amount);
+};
+```
+
+---
+
+## Metodos de Pago (constante)
+
+```typescript
+const PAYMENT_METHODS = [
+  { value: 'cash', label: 'Efectivo' },
+  { value: 'card', label: 'Tarjeta' },
+  { value: 'bank', label: 'Transferencia' },
+  { value: 'other', label: 'Otro' },
+];
+```
 
 ---
 
@@ -424,64 +342,59 @@ import Invoices from "@/pages/dashboard/Invoices";
 
 1. **Multi-tenant**: Todas las queries filtran por business_id
 2. **RLS**: Politicas existentes validan membresia
-3. **Feature gating**: RequireModule bloquea si no tiene invoicing
-4. **Numero atomico**: RPC con FOR UPDATE previene duplicados
-5. **Sin delete**: Solo cambios de status
-6. **Validacion**: Zod valida todos los inputs
-7. **created_by**: Trackea quien creo la factura
-
----
-
-## Formateo de Moneda (Deuda Tecnica)
-
-Para MVP, usar currency hardcodeada MXN:
-```typescript
-const formatPrice = (amount: number) => {
-  return new Intl.NumberFormat('es-MX', {
-    style: 'currency',
-    currency: 'MXN', // TODO: usar activeBusiness.currency
-  }).format(amount);
-};
-```
+3. **Feature gating**: RequireModule bloquea si no tiene payments
+4. **Sin delete**: No hay funcion de eliminar pagos en MVP
+5. **Validacion**: Zod valida todos los inputs
+6. **created_by**: Trackea quien creo el pago
+7. **Estado atomico**: Recalculo de factura despues de cada pago
 
 ---
 
 ## Orden de Implementacion
 
-1. useBusinessSettings hook (simple, necesario para tax_rate)
-2. useInvoices hook (core logic)
-3. InvoiceLineItem component
-4. InvoiceForm component
-5. NewInvoicePage
-6. InvoicesHeader
-7. InvoicesTable
-8. InvoicesList
-9. Invoices.tsx (contenedor)
-10. Actualizar Dashboard.tsx
+1. Agregar types en database.ts
+2. Crear usePayments hook
+3. Crear PaymentFormDialog component
+4. Crear PaymentsHeader component
+5. Crear PaymentsTable component
+6. Crear PaymentsList page
+7. Crear Payments.tsx (contenedor)
+8. Actualizar Dashboard.tsx
 
 ---
 
 ## Checklist de Validacion
 
 ### Funcional
-- [ ] Numero de factura se genera via RPC al cargar /new
-- [ ] Numero no se puede editar manualmente
-- [ ] Selector de cliente carga clientes activos
-- [ ] Lineas permiten seleccionar producto (autocompletado)
-- [ ] Totales se calculan en tiempo real
-- [ ] Guardar crea invoice + items
-- [ ] Listado muestra facturas con nombre de cliente
-- [ ] Filtros por status funcionan
-- [ ] Cambio de status funciona
+- [ ] Puedo crear un pago sobre una factura existente
+- [ ] El pago aparece en el listado
+- [ ] Si el pago completa el total, la factura pasa a paid y setea paid_at
+- [ ] Si no completa el total, la factura queda sent u overdue segun due_date
+- [ ] No se tocan facturas draft/cancelled desde pagos
+- [ ] Busqueda por numero de factura funciona
 
 ### Seguridad
-- [ ] No se muestran facturas de otros negocios
+- [ ] Usuario de otro negocio no ve pagos (RLS)
 - [ ] Cambio de negocio recarga datos correctamente
-- [ ] Sin modulo invoicing → bloqueo correcto
+- [ ] Sin modulo payments -> bloqueo correcto
 
 ### UX
-- [ ] Loading states en listado y form
+- [ ] Loading states en listado y dialog
 - [ ] Empty state con CTA
 - [ ] Toasts de exito/error
+- [ ] Info de factura visible al seleccionar (total/pagado/pendiente)
 - [ ] Validacion visible en campos
 
+---
+
+## Consideraciones de Estado de Factura
+
+La logica de recalculo NO toca:
+- `draft`: Factura aun no enviada, no deberia tener pagos
+- `cancelled`: Factura anulada, no deberia recibir pagos
+
+Si una factura esta en `sent`, `overdue`, o incluso `paid` (abonos adicionales):
+- Se recalcula el total pagado
+- Si >= total -> `paid` + `paid_at`
+- Si < total y due_date < hoy -> `overdue`
+- Si < total y due_date >= hoy (o null) -> `sent`
