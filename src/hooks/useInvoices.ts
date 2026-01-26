@@ -17,11 +17,9 @@ export interface InvoiceItemInput {
 
 export interface CreateInvoiceData {
   client_id: string;
-  invoice_number: string;
   due_date?: string;
   notes?: string;
   items: InvoiceItemInput[];
-  taxRate: number;
 }
 
 interface UseInvoicesReturn {
@@ -176,7 +174,7 @@ export function useInvoices(): UseInvoicesReturn {
     }
   }, [activeBusinessId, toast]);
 
-  // Create invoice with items
+  // Create invoice with items using transactional RPC
   const createInvoice = useCallback(async (data: CreateInvoiceData): Promise<boolean> => {
     if (!activeBusinessId || !user) {
       toast({
@@ -188,62 +186,32 @@ export function useInvoices(): UseInvoicesReturn {
     }
 
     try {
-      // Calculate totals
-      const subtotal = data.items.reduce((sum, item) => {
-        return sum + (item.quantity * item.unit_price);
-      }, 0);
-      const tax = subtotal * (data.taxRate / 100);
-      const total = subtotal + tax;
-
-      // Insert invoice
-      const { data: invoice, error: invoiceError } = await supabase
-        .from('invoices')
-        .insert({
-          business_id: activeBusinessId,
-          client_id: data.client_id,
-          invoice_number: data.invoice_number,
-          status: 'draft' as InvoiceStatus,
-          subtotal,
-          tax,
-          total,
-          due_date: data.due_date || null,
-          notes: data.notes || null,
-          created_by: user.id,
-        })
-        .select('id')
-        .single();
-
-      if (invoiceError) {
-        throw invoiceError;
-      }
-
-      // Insert invoice items
-      const itemsToInsert = data.items.map((item) => ({
-        invoice_id: invoice.id,
+      // Convert items to JSONB format for the RPC
+      const itemsJson = data.items.map((item) => ({
         product_id: item.product_id || null,
         description: item.description,
         quantity: item.quantity,
         unit_price: item.unit_price,
-        total: item.quantity * item.unit_price,
       }));
 
-      const { error: itemsError } = await supabase
-        .from('invoice_items')
-        .insert(itemsToInsert);
+      // Call transactional RPC - generates invoice number atomically
+      const { data: result, error: rpcError } = await supabase.rpc('create_invoice_with_items', {
+        _business_id: activeBusinessId,
+        _client_id: data.client_id,
+        _items: itemsJson,
+        _due_date: data.due_date || null,
+        _notes: data.notes || null,
+      });
 
-      if (itemsError) {
-        // Mark invoice as cancelled instead of deleting (soft delete pattern)
-        await supabase
-          .from('invoices')
-          .update({ status: 'cancelled' as InvoiceStatus })
-          .eq('id', invoice.id)
-          .eq('business_id', activeBusinessId);
-        throw itemsError;
+      if (rpcError) {
+        throw rpcError;
       }
 
+      const invoiceNumber = result?.[0]?.invoice_number || 'Nueva';
+      
       toast({
         title: 'Factura creada',
-        description: `Factura ${data.invoice_number} creada correctamente`,
+        description: `Factura ${invoiceNumber} creada correctamente`,
       });
 
       await fetchInvoices();

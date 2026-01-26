@@ -673,6 +673,19 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_invoice_with_items: {
+        Args: {
+          _business_id: string
+          _client_id: string
+          _due_date?: string
+          _items: Json
+          _notes?: string
+        }
+        Returns: {
+          invoice_id: string
+          invoice_number: string
+        }[]
+      }
       create_payment_and_recalc_invoice: {
         Args: {
           _amount: number
@@ -689,6 +702,21 @@ export type Database = {
         Returns: string
       }
       get_active_business: { Args: never; Returns: string }
+      get_dashboard_metrics: {
+        Args: { _business_id: string }
+        Returns: {
+          active_clients: number
+          monthly_payments_count: number
+          monthly_revenue: number
+          overdue_amount: number
+          overdue_invoices: number
+          pending_amount: number
+          pending_invoices: number
+          prev_active_clients: number
+          prev_monthly_payments_count: number
+          prev_monthly_revenue: number
+        }[]
+      }
       get_user_role_in_business: {
         Args: { _business_id: string }
         Returns: Database["public"]["Enums"]["app_role"]
