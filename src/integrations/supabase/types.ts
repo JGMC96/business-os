@@ -543,6 +543,8 @@ export type Database = {
           is_active: boolean
           name: string
           price: number
+          stock_quantity: number | null
+          track_inventory: boolean | null
           unit: string | null
           updated_at: string
         }
@@ -556,6 +558,8 @@ export type Database = {
           is_active?: boolean
           name: string
           price?: number
+          stock_quantity?: number | null
+          track_inventory?: boolean | null
           unit?: string | null
           updated_at?: string
         }
@@ -569,6 +573,8 @@ export type Database = {
           is_active?: boolean
           name?: string
           price?: number
+          stock_quantity?: number | null
+          track_inventory?: boolean | null
           unit?: string | null
           updated_at?: string
         }
@@ -613,6 +619,108 @@ export type Database = {
             columns: ["active_business_id"]
             isOneToOne: false
             referencedRelation: "businesses"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sale_items: {
+        Row: {
+          id: string
+          product_id: string | null
+          product_name: string
+          quantity: number
+          sale_id: string
+          total: number
+          unit_price: number
+        }
+        Insert: {
+          id?: string
+          product_id?: string | null
+          product_name: string
+          quantity?: number
+          sale_id: string
+          total?: number
+          unit_price?: number
+        }
+        Update: {
+          id?: string
+          product_id?: string | null
+          product_name?: string
+          quantity?: number
+          sale_id?: string
+          total?: number
+          unit_price?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sale_items_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sale_items_sale_id_fkey"
+            columns: ["sale_id"]
+            isOneToOne: false
+            referencedRelation: "sales"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales: {
+        Row: {
+          business_id: string
+          client_id: string | null
+          created_at: string
+          created_by: string | null
+          id: string
+          notes: string | null
+          payment_method: string | null
+          sale_number: string
+          subtotal: number
+          tax: number
+          total: number
+        }
+        Insert: {
+          business_id: string
+          client_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          notes?: string | null
+          payment_method?: string | null
+          sale_number: string
+          subtotal?: number
+          tax?: number
+          total?: number
+        }
+        Update: {
+          business_id?: string
+          client_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          notes?: string | null
+          payment_method?: string | null
+          sale_number?: string
+          subtotal?: number
+          tax?: number
+          total?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_business_id_fkey"
+            columns: ["business_id"]
+            isOneToOne: false
+            referencedRelation: "businesses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
             referencedColumns: ["id"]
           },
         ]
@@ -701,6 +809,7 @@ export type Database = {
         Args: { _business_id: string }
         Returns: string
       }
+      generate_sale_number: { Args: { _business_id: string }; Returns: string }
       get_active_business: { Args: never; Returns: string }
       get_dashboard_metrics: {
         Args: { _business_id: string }

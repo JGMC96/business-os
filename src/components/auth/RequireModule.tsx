@@ -18,6 +18,7 @@ const MODULE_NAMES: Record<ModuleKey, string> = {
   payments: 'Pagos',
   ai_advisor: 'Asesor IA',
   reports: 'Reportes',
+  retail: 'Retail',
 };
 
 export function RequireModule({ module, children, fallback }: RequireModuleProps) {

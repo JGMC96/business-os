@@ -6,7 +6,7 @@ export type SubscriptionStatus = 'active' | 'cancelled' | 'past_due' | 'trialing
 export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue' | 'cancelled';
 
 // Module keys for type safety (maps to modules.key in DB)
-export type ModuleKey = 'clients' | 'products' | 'invoicing' | 'payments' | 'ai_advisor' | 'reports';
+export type ModuleKey = 'clients' | 'products' | 'invoicing' | 'payments' | 'ai_advisor' | 'reports' | 'retail';
 
 // Plan keys for type safety (maps to plans.key in DB)
 export type PlanKey = 'free' | 'trial' | 'pro' | 'business';

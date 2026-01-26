@@ -6,6 +6,7 @@ import {
   Package,
   FileText,
   CreditCard,
+  ShoppingCart,
   MessageSquare,
   Settings,
   ChevronLeft,
@@ -37,6 +38,7 @@ const menuItems: MenuItem[] = [
   { icon: Package, label: "Productos", path: "/dashboard/products", moduleKey: "products" },
   { icon: FileText, label: "Facturas", path: "/dashboard/invoices", moduleKey: "invoicing" },
   { icon: CreditCard, label: "Pagos", path: "/dashboard/payments", moduleKey: "payments" },
+  { icon: ShoppingCart, label: "Retail", path: "/dashboard/retail", moduleKey: "retail" },
   { icon: MessageSquare, label: "Asesor IA", path: "/dashboard/ai", moduleKey: "ai_advisor" },
 ];
 
