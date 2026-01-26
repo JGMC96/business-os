@@ -19,15 +19,38 @@ const Auth = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session) {
-        navigate("/dashboard");
+        // Check if user has any businesses
+        const { data: memberships } = await supabase
+          .from('business_members')
+          .select('business_id')
+          .eq('user_id', session.user.id)
+          .eq('is_active', true)
+          .limit(1);
+        
+        if (!memberships || memberships.length === 0) {
+          navigate("/onboarding");
+        } else {
+          navigate("/dashboard");
+        }
       }
     });
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (session) {
-        navigate("/dashboard");
+        const { data: memberships } = await supabase
+          .from('business_members')
+          .select('business_id')
+          .eq('user_id', session.user.id)
+          .eq('is_active', true)
+          .limit(1);
+        
+        if (!memberships || memberships.length === 0) {
+          navigate("/onboarding");
+        } else {
+          navigate("/dashboard");
+        }
       }
     });
 
