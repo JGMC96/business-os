@@ -10,7 +10,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { Building2, Sparkles, ArrowRight, Loader2 } from 'lucide-react';
-import type { ModuleType } from '@/types/database';
 
 const INDUSTRIES = [
   { value: 'retail', label: 'Comercio / Retail' },
@@ -24,8 +23,6 @@ const INDUSTRIES = [
   { value: 'manufacturing', label: 'Manufactura' },
   { value: 'other', label: 'Otro' },
 ];
-
-const DEFAULT_MODULES: ModuleType[] = ['clients', 'products', 'invoicing', 'payments'];
 
 export default function Onboarding() {
   const navigate = useNavigate();
@@ -87,31 +84,65 @@ export default function Onboarding() {
 
       if (memberError) throw memberError;
 
-      // 3. Create trial subscription
+      // 3. Get trial plan from plans table
+      const { data: trialPlan, error: planError } = await supabase
+        .from('plans')
+        .select('id')
+        .eq('key', 'trial')
+        .single();
+
+      if (planError) throw planError;
+
+      // 4. Create trial subscription with plan_id FK
       const { error: subError } = await supabase
         .from('subscriptions')
         .insert({
           business_id: business.id,
-          plan: 'trial',
+          plan_id: trialPlan.id,
           status: 'trialing',
         });
 
       if (subError) throw subError;
 
-      // 4. Enable default modules
-      const moduleInserts = DEFAULT_MODULES.map((module) => ({
-        business_id: business.id,
-        module,
-        is_enabled: true,
-      }));
+      // 5. Get modules included in trial plan from plan_modules
+      const { data: planModules, error: planModulesError } = await supabase
+        .from('plan_modules')
+        .select('module_id')
+        .eq('plan_id', trialPlan.id);
 
-      const { error: modulesError } = await supabase
-        .from('business_modules')
-        .insert(moduleInserts);
+      if (planModulesError) throw planModulesError;
 
-      if (modulesError) throw modulesError;
+      // 6. Enable modules for the business using module_id FK
+      if (planModules && planModules.length > 0) {
+        const moduleInserts = planModules.map((pm) => ({
+          business_id: business.id,
+          module_id: pm.module_id,
+          is_enabled: true,
+        }));
 
-      // 5. Refresh context and navigate
+        const { error: modulesError } = await supabase
+          .from('business_modules')
+          .insert(moduleInserts);
+
+        if (modulesError) throw modulesError;
+      }
+
+      // 7. Create business settings
+      const { error: settingsError } = await supabase
+        .from('business_settings')
+        .insert({
+          business_id: business.id,
+          next_invoice_number: 1,
+          invoice_prefix: 'FAC-',
+          tax_rate: 16.00,
+        });
+
+      if (settingsError) throw settingsError;
+
+      // 8. Set this as the active business in profile
+      await supabase.rpc('set_active_business', { _business_id: business.id });
+
+      // 9. Refresh context and navigate
       await refreshBusinesses();
       toast.success('¡Negocio creado exitosamente!');
       navigate('/dashboard');

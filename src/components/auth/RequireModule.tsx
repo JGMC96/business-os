@@ -1,17 +1,17 @@
 import { ReactNode } from 'react';
 import { useModuleAccess } from '@/hooks/useModuleAccess';
-import type { ModuleType } from '@/types/database';
+import type { ModuleKey } from '@/types/database';
 import { Lock } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 
 interface RequireModuleProps {
-  module: ModuleType;
+  module: ModuleKey;
   children: ReactNode;
   fallback?: ReactNode;
 }
 
-const MODULE_NAMES: Record<ModuleType, string> = {
+const MODULE_NAMES: Record<ModuleKey, string> = {
   clients: 'Clientes',
   products: 'Productos',
   invoicing: 'Facturación',

@@ -2,17 +2,51 @@
 // These types mirror the Supabase schema
 
 export type AppRole = 'owner' | 'admin' | 'staff';
-export type SubscriptionPlan = 'free' | 'trial' | 'pro' | 'business';
 export type SubscriptionStatus = 'active' | 'cancelled' | 'past_due' | 'trialing';
-export type ModuleType = 'clients' | 'products' | 'invoicing' | 'payments' | 'ai_advisor' | 'reports';
 export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue' | 'cancelled';
+
+// Module keys for type safety (maps to modules.key in DB)
+export type ModuleKey = 'clients' | 'products' | 'invoicing' | 'payments' | 'ai_advisor' | 'reports';
+
+// Plan keys for type safety (maps to plans.key in DB)
+export type PlanKey = 'free' | 'trial' | 'pro' | 'business';
 
 export interface Profile {
   id: string;
   full_name: string | null;
   avatar_url: string | null;
+  active_business_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface Plan {
+  id: string;
+  key: PlanKey;
+  name: string;
+  price_monthly: number;
+  price_yearly: number;
+  limits: Record<string, unknown>;
+  is_active: boolean;
+  display_order: number;
+  created_at: string;
+}
+
+export interface Module {
+  id: string;
+  key: ModuleKey;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  display_order: number;
+  created_at: string;
+}
+
+export interface PlanModule {
+  id: string;
+  plan_id: string;
+  module_id: string;
+  limits: Record<string, unknown>;
 }
 
 export interface Business {
@@ -40,7 +74,7 @@ export interface BusinessMember {
 export interface Subscription {
   id: string;
   business_id: string;
-  plan: SubscriptionPlan;
+  plan_id: string;
   status: SubscriptionStatus;
   trial_ends_at: string | null;
   current_period_start: string | null;
@@ -52,9 +86,19 @@ export interface Subscription {
 export interface BusinessModule {
   id: string;
   business_id: string;
-  module: ModuleType;
+  module_id: string;
   is_enabled: boolean;
   limits: Record<string, unknown>;
+}
+
+export interface BusinessSettings {
+  id: string;
+  business_id: string;
+  next_invoice_number: number;
+  invoice_prefix: string;
+  tax_rate: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Client {
@@ -129,6 +173,7 @@ export interface AuditLog {
   id: string;
   business_id: string | null;
   user_id: string | null;
+  actor_user_id: string | null;
   action: string;
   table_name: string;
   record_id: string | null;
@@ -142,5 +187,10 @@ export interface AuditLog {
 export interface BusinessWithMembership extends Business {
   role: AppRole;
   subscription?: Subscription;
-  modules?: BusinessModule[];
+  modules?: BusinessModuleWithKey[];
+}
+
+// Business module with the module key for access checks
+export interface BusinessModuleWithKey extends BusinessModule {
+  module_key: ModuleKey;
 }

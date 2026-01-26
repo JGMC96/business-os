@@ -17,6 +17,7 @@ export type Database = {
       audit_logs: {
         Row: {
           action: string
+          actor_user_id: string | null
           business_id: string | null
           created_at: string
           id: string
@@ -29,6 +30,7 @@ export type Database = {
         }
         Insert: {
           action: string
+          actor_user_id?: string | null
           business_id?: string | null
           created_at?: string
           id?: string
@@ -41,6 +43,7 @@ export type Database = {
         }
         Update: {
           action?: string
+          actor_user_id?: string | null
           business_id?: string | null
           created_at?: string
           id?: string
@@ -105,27 +108,72 @@ export type Database = {
           id: string
           is_enabled: boolean
           limits: Json | null
-          module: Database["public"]["Enums"]["module_type"]
+          module_id: string
         }
         Insert: {
           business_id: string
           id?: string
           is_enabled?: boolean
           limits?: Json | null
-          module: Database["public"]["Enums"]["module_type"]
+          module_id: string
         }
         Update: {
           business_id?: string
           id?: string
           is_enabled?: boolean
           limits?: Json | null
-          module?: Database["public"]["Enums"]["module_type"]
+          module_id?: string
         }
         Relationships: [
           {
             foreignKeyName: "business_modules_business_id_fkey"
             columns: ["business_id"]
             isOneToOne: false
+            referencedRelation: "businesses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "business_modules_module_id_fkey"
+            columns: ["module_id"]
+            isOneToOne: false
+            referencedRelation: "modules"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      business_settings: {
+        Row: {
+          business_id: string
+          created_at: string
+          id: string
+          invoice_prefix: string | null
+          next_invoice_number: number
+          tax_rate: number | null
+          updated_at: string
+        }
+        Insert: {
+          business_id: string
+          created_at?: string
+          id?: string
+          invoice_prefix?: string | null
+          next_invoice_number?: number
+          tax_rate?: number | null
+          updated_at?: string
+        }
+        Update: {
+          business_id?: string
+          created_at?: string
+          id?: string
+          invoice_prefix?: string | null
+          next_invoice_number?: number
+          tax_rate?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "business_settings_business_id_fkey"
+            columns: ["business_id"]
+            isOneToOne: true
             referencedRelation: "businesses"
             referencedColumns: ["id"]
           },
@@ -328,6 +376,36 @@ export type Database = {
           },
         ]
       }
+      modules: {
+        Row: {
+          created_at: string
+          description: string | null
+          display_order: number | null
+          id: string
+          is_active: boolean
+          key: string
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          display_order?: number | null
+          id?: string
+          is_active?: boolean
+          key: string
+          name: string
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          display_order?: number | null
+          id?: string
+          is_active?: boolean
+          key?: string
+          name?: string
+        }
+        Relationships: []
+      }
       payments: {
         Row: {
           amount: number
@@ -382,6 +460,78 @@ export type Database = {
           },
         ]
       }
+      plan_modules: {
+        Row: {
+          id: string
+          limits: Json | null
+          module_id: string
+          plan_id: string
+        }
+        Insert: {
+          id?: string
+          limits?: Json | null
+          module_id: string
+          plan_id: string
+        }
+        Update: {
+          id?: string
+          limits?: Json | null
+          module_id?: string
+          plan_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plan_modules_module_id_fkey"
+            columns: ["module_id"]
+            isOneToOne: false
+            referencedRelation: "modules"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plan_modules_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "plans"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      plans: {
+        Row: {
+          created_at: string
+          display_order: number | null
+          id: string
+          is_active: boolean
+          key: string
+          limits: Json | null
+          name: string
+          price_monthly: number | null
+          price_yearly: number | null
+        }
+        Insert: {
+          created_at?: string
+          display_order?: number | null
+          id?: string
+          is_active?: boolean
+          key: string
+          limits?: Json | null
+          name: string
+          price_monthly?: number | null
+          price_yearly?: number | null
+        }
+        Update: {
+          created_at?: string
+          display_order?: number | null
+          id?: string
+          is_active?: boolean
+          key?: string
+          limits?: Json | null
+          name?: string
+          price_monthly?: number | null
+          price_yearly?: number | null
+        }
+        Relationships: []
+      }
       products: {
         Row: {
           business_id: string
@@ -434,6 +584,7 @@ export type Database = {
       }
       profiles: {
         Row: {
+          active_business_id: string | null
           avatar_url: string | null
           created_at: string
           full_name: string | null
@@ -441,6 +592,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          active_business_id?: string | null
           avatar_url?: string | null
           created_at?: string
           full_name?: string | null
@@ -448,13 +600,22 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          active_business_id?: string | null
           avatar_url?: string | null
           created_at?: string
           full_name?: string | null
           id?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "profiles_active_business_id_fkey"
+            columns: ["active_business_id"]
+            isOneToOne: false
+            referencedRelation: "businesses"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       subscriptions: {
         Row: {
@@ -463,7 +624,7 @@ export type Database = {
           current_period_end: string | null
           current_period_start: string | null
           id: string
-          plan: Database["public"]["Enums"]["subscription_plan"]
+          plan_id: string
           status: Database["public"]["Enums"]["subscription_status"]
           trial_ends_at: string | null
           updated_at: string
@@ -474,7 +635,7 @@ export type Database = {
           current_period_end?: string | null
           current_period_start?: string | null
           id?: string
-          plan?: Database["public"]["Enums"]["subscription_plan"]
+          plan_id: string
           status?: Database["public"]["Enums"]["subscription_status"]
           trial_ends_at?: string | null
           updated_at?: string
@@ -485,7 +646,7 @@ export type Database = {
           current_period_end?: string | null
           current_period_start?: string | null
           id?: string
-          plan?: Database["public"]["Enums"]["subscription_plan"]
+          plan_id?: string
           status?: Database["public"]["Enums"]["subscription_status"]
           trial_ends_at?: string | null
           updated_at?: string
@@ -498,31 +659,25 @@ export type Database = {
             referencedRelation: "businesses"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "subscriptions_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "plans"
+            referencedColumns: ["id"]
+          },
         ]
-      }
-      user_roles: {
-        Row: {
-          id: string
-          role: Database["public"]["Enums"]["app_role"]
-          user_id: string
-        }
-        Insert: {
-          id?: string
-          role: Database["public"]["Enums"]["app_role"]
-          user_id: string
-        }
-        Update: {
-          id?: string
-          role?: Database["public"]["Enums"]["app_role"]
-          user_id?: string
-        }
-        Relationships: []
       }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      generate_invoice_number: {
+        Args: { _business_id: string }
+        Returns: string
+      }
+      get_active_business: { Args: never; Returns: string }
       get_user_role_in_business: {
         Args: { _business_id: string }
         Returns: Database["public"]["Enums"]["app_role"]
@@ -545,6 +700,7 @@ export type Database = {
         Args: { _business_id: string }
         Returns: boolean
       }
+      set_active_business: { Args: { _business_id: string }; Returns: boolean }
     }
     Enums: {
       app_role: "owner" | "admin" | "staff"
