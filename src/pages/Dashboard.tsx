@@ -1,12 +1,22 @@
 import { useState } from "react";
 import { Routes, Route } from "react-router-dom";
 import { motion } from "framer-motion";
+import { FileText, CreditCard, MessageSquare, Settings } from "lucide-react";
 import { useBusiness } from "@/contexts/BusinessContext";
 import { DashboardSidebar } from "@/components/dashboard/DashboardSidebar";
 import { DashboardHeader } from "@/components/dashboard/DashboardHeader";
 import { DashboardOverview } from "@/components/dashboard/DashboardOverview";
 import Clients from "@/pages/dashboard/Clients";
 import Products from "@/pages/dashboard/Products";
+import LockedModulePage from "@/pages/dashboard/LockedModulePage";
+
+const SettingsPlaceholder = () => (
+  <div className="flex flex-col items-center justify-center py-20">
+    <Settings className="w-16 h-16 text-muted-foreground mb-4" />
+    <h2 className="text-2xl font-bold mb-2">Configuración</h2>
+    <p className="text-muted-foreground">Próximamente disponible</p>
+  </div>
+);
 
 const Dashboard = () => {
   const { user, activeBusiness, signOut } = useBusiness();
@@ -33,6 +43,16 @@ const Dashboard = () => {
               <Route index element={<DashboardOverview />} />
               <Route path="clients/*" element={<Clients />} />
               <Route path="products/*" element={<Products />} />
+              <Route path="invoices/*" element={
+                <LockedModulePage moduleName="Facturación" moduleKey="invoicing" icon={FileText} />
+              } />
+              <Route path="payments/*" element={
+                <LockedModulePage moduleName="Pagos" moduleKey="payments" icon={CreditCard} />
+              } />
+              <Route path="ai/*" element={
+                <LockedModulePage moduleName="Asesor IA" moduleKey="ai_advisor" icon={MessageSquare} />
+              } />
+              <Route path="settings/*" element={<SettingsPlaceholder />} />
             </Routes>
           </motion.div>
         </main>
