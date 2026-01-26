@@ -1,255 +1,179 @@
 
-# Plan: Navegación Inteligente en Sidebar
+# Plan: Ajustes de Pulido al Sidebar
 
 ## Resumen
 
-Actualizar el DashboardSidebar para mostrar navegación con feature gating: items de módulos habilitados son navegables, módulos no habilitados aparecen bloqueados con candado y CTA de "Mejorar plan".
+Tres correcciones preventivas antes de implementar Facturas: fix de active state por prefijo, mejor affordance para locked items, y rutas placeholder para evitar 404s internos.
 
 ---
 
-## Estado Actual
+## Problema 1: Active State por Prefijo
 
-### Sidebar actual
-- Menu items definidos estáticamente sin `moduleKey`
-- Todos los items son Links navegables (incluso módulos no implementados)
-- Business selector muestra datos hardcodeados ("Mi Negocio", "Plan Pro")
+### Estado actual
+```typescript
+const isActive = location.pathname === item.path;
+```
+En `/dashboard/clients/123` o `/dashboard/clients/new`, el item "Clientes" aparece inactivo.
 
-### Recursos disponibles
-- `useBusiness()` provee `enabledModules`, `activeBusiness`
-- `ModuleKey`: `'clients' | 'products' | 'invoicing' | 'payments' | 'ai_advisor' | 'reports'`
-- Icono `Lock` de lucide-react para items bloqueados
+### Solucion
+```typescript
+const isActive = 
+  item.path === "/dashboard" 
+    ? location.pathname === "/dashboard"
+    : location.pathname === item.path || location.pathname.startsWith(item.path + "/");
+```
+
+**Nota**: Dashboard usa igualdad exacta para no activarse en todas las subrutas.
 
 ---
 
-## Arquitectura de la Solución
+## Problema 2: Affordance para Locked Items
 
-```text
-menuItems[]
-    |
-    +-- { icon, label, path }                    → Siempre visible (Dashboard, Settings)
-    +-- { icon, label, path, moduleKey }         → Requiere módulo habilitado
-         |
-         +-- moduleKey in enabledModules? → Link normal
-         +-- moduleKey NOT in enabledModules? → Item bloqueado + Lock + tooltip
+### Estado actual
+- Solo `title="Mejorar plan para acceder"` (tooltip nativo, poco visible)
+- Sin click handler
+
+### Solucion MVP
+Convertir el `div` bloqueado en `button` con:
+- Click que muestra toast: "Mejora tu plan para acceder a este modulo"
+- Mantener `cursor-not-allowed` visual pero agregar interactividad
+
+```typescript
+import { toast } from "sonner";
+
+// En el render de item bloqueado:
+<button
+  type="button"
+  onClick={() => toast.info("Mejora tu plan para acceder a este módulo", {
+    action: {
+      label: "Ver planes",
+      onClick: () => {/* futuro: navigate to pricing */}
+    }
+  })}
+  className={cn(
+    "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl",
+    "text-sidebar-foreground/40 hover:bg-sidebar-accent/30 transition-colors",
+    !isOpen && "justify-center"
+  )}
+>
+  ...
+</button>
 ```
 
 ---
 
-## Cambios en DashboardSidebar.tsx
+## Problema 3: Rutas Faltantes (404 Prevention)
 
-### 1. Importar contexto y agregar Lock icon
+### Estado actual
+Routes en Dashboard.tsx:
+- `/dashboard` (overview)
+- `/dashboard/clients/*`
+- `/dashboard/products/*`
+
+### Links en sidebar sin ruta:
+- `/dashboard/invoices` - 404
+- `/dashboard/payments` - 404  
+- `/dashboard/ai` - 404
+- `/dashboard/settings` - 404
+
+### Solucion
+Crear componente placeholder `LockedModulePage.tsx` reutilizable:
 
 ```typescript
-import { useBusiness } from "@/contexts/BusinessContext";
-import { Lock } from "lucide-react";
-import type { ModuleKey } from "@/types/database";
-```
-
-### 2. Actualizar estructura de menuItems
-
-```typescript
-interface MenuItem {
+// src/pages/dashboard/LockedModulePage.tsx
+interface Props {
+  moduleName: string;
+  moduleKey: ModuleKey;
   icon: LucideIcon;
-  label: string;
-  path: string;
-  moduleKey?: ModuleKey; // undefined = siempre visible
 }
 
-const menuItems: MenuItem[] = [
-  { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
-  { icon: Users, label: "Clientes", path: "/dashboard/clients", moduleKey: "clients" },
-  { icon: Package, label: "Productos", path: "/dashboard/products", moduleKey: "products" },
-  { icon: FileText, label: "Facturas", path: "/dashboard/invoices", moduleKey: "invoicing" },
-  { icon: CreditCard, label: "Pagos", path: "/dashboard/payments", moduleKey: "payments" },
-  { icon: MessageSquare, label: "Asesor IA", path: "/dashboard/ai", moduleKey: "ai_advisor" },
-];
-```
-
-### 3. Lógica de renderizado condicional
-
-```typescript
-const { enabledModules, activeBusiness } = useBusiness();
-
-// Para cada item:
-const isModuleEnabled = !item.moduleKey || enabledModules.includes(item.moduleKey);
-const isLocked = item.moduleKey && !isModuleEnabled;
-```
-
-### 4. Renderizado de items
-
-**Módulo habilitado:** Link normal con hover y active states
-
-**Módulo bloqueado:**
-- `div` en lugar de `Link` (no navegable)
-- Opacidad reducida (opacity-50)
-- Cursor not-allowed
-- Icono de Lock pequeño junto al label
-- Tooltip con "Mejorar plan" (cuando sidebar está expandido)
-
-```tsx
-{isLocked ? (
-  <div
-    className={cn(
-      "flex items-center gap-3 px-3 py-2.5 rounded-xl",
-      "text-sidebar-foreground/40 cursor-not-allowed",
-      !isOpen && "justify-center"
-    )}
-    title="Mejorar plan para acceder"
-  >
-    <item.icon className="w-5 h-5 flex-shrink-0" />
-    {isOpen && (
-      <div className="flex items-center gap-2 flex-1">
-        <span className="text-sm font-medium">{item.label}</span>
-        <Lock className="w-3.5 h-3.5 text-sidebar-foreground/40" />
+export default function LockedModulePage({ moduleName, moduleKey, icon: Icon }: Props) {
+  const { hasAccess } = useModuleAccess(moduleKey);
+  
+  if (hasAccess) {
+    // Si tiene acceso pero no hay implementacion, mostrar "Coming Soon"
+    return (
+      <div className="flex flex-col items-center justify-center py-20">
+        <Icon className="w-16 h-16 text-muted-foreground mb-4" />
+        <h2 className="text-2xl font-bold mb-2">{moduleName}</h2>
+        <p className="text-muted-foreground">Proximamente disponible</p>
       </div>
-    )}
-  </div>
-) : (
-  <Link ... /> // Código actual
-)}
+    );
+  }
+
+  // Sin acceso: RequireModule ya maneja el bloqueo
+  return <RequireModule module={moduleKey}><div /></RequireModule>;
+}
 ```
 
-### 5. Business selector con datos reales
-
-Actualmente hardcodeado, cambiar a:
-
-```tsx
-{isOpen && (
-  <div className="flex-1 text-left">
-    <p className="text-sm font-medium truncate">
-      {activeBusiness?.name || "Sin negocio"}
-    </p>
-    <p className="text-xs text-sidebar-foreground/60">
-      {/* TODO: Mostrar plan cuando tengamos subscription */}
-      Negocio activo
-    </p>
-  </div>
-)}
-```
-
----
-
-## UI States
-
-| Estado | Apariencia |
-|--------|------------|
-| Habilitado + inactivo | Opacidad normal, hover bg |
-| Habilitado + activo | Fondo primario, texto contraste |
-| Bloqueado | Opacidad 40%, candado, no clickeable |
-| Sidebar colapsado + bloqueado | Solo icono con opacidad reducida |
-
----
-
-## Detalles Técnicos
-
-### Colores y estilos
-
+### Agregar rutas en Dashboard.tsx
 ```typescript
-// Item bloqueado
-"text-sidebar-foreground/40 cursor-not-allowed"
+import LockedModulePage from "@/pages/dashboard/LockedModulePage";
+import { FileText, CreditCard, MessageSquare, Settings } from "lucide-react";
 
-// Candado
-"w-3.5 h-3.5 text-sidebar-foreground/40"
+// En Routes:
+<Route path="invoices/*" element={
+  <LockedModulePage moduleName="Facturacion" moduleKey="invoicing" icon={FileText} />
+} />
+<Route path="payments/*" element={
+  <LockedModulePage moduleName="Pagos" moduleKey="payments" icon={CreditCard} />
+} />
+<Route path="ai/*" element={
+  <LockedModulePage moduleName="Asesor IA" moduleKey="ai_advisor" icon={MessageSquare} />
+} />
+<Route path="settings/*" element={
+  <SettingsPlaceholder />
+} />
 ```
 
-### Tooltip para bloqueados (opcional MVP+)
-
-Usar `title` attribute como MVP:
-```tsx
-title="Mejorar plan para acceder"
+### Settings Placeholder Simple
+```typescript
+// Inline en Dashboard.tsx o archivo separado
+const SettingsPlaceholder = () => (
+  <div className="flex flex-col items-center justify-center py-20">
+    <Settings className="w-16 h-16 text-muted-foreground mb-4" />
+    <h2 className="text-2xl font-bold mb-2">Configuracion</h2>
+    <p className="text-muted-foreground">Proximamente disponible</p>
+  </div>
+);
 ```
-
-En el futuro, podría usarse el componente Tooltip de shadcn para mejor UX.
 
 ---
 
-## Archivos a Modificar
+## Archivos a Modificar/Crear
 
 | Archivo | Cambios |
 |---------|---------|
-| `src/components/dashboard/DashboardSidebar.tsx` | Agregar moduleKey a items, lógica de bloqueo, datos reales del negocio |
+| `src/components/dashboard/DashboardSidebar.tsx` | Fix isActive prefijo, button con toast para locked |
+| `src/pages/dashboard/LockedModulePage.tsx` | **Crear** - Placeholder reutilizable |
+| `src/pages/Dashboard.tsx` | Agregar rutas placeholder para invoices/payments/ai/settings |
 
 ---
 
-## Código Final Esperado (Estructura)
+## Orden de Implementacion
 
-```tsx
-export const DashboardSidebar = ({ isOpen, onToggle }: DashboardSidebarProps) => {
-  const location = useLocation();
-  const { enabledModules, activeBusiness } = useBusiness();
-
-  return (
-    <motion.aside ...>
-      {/* Logo section - sin cambios */}
-      
-      {/* Business selector - con datos reales */}
-      <div className="p-4 border-b border-sidebar-border">
-        <button ...>
-          ...
-          {isOpen && (
-            <div className="flex-1 text-left">
-              <p className="text-sm font-medium truncate">
-                {activeBusiness?.name || "Sin negocio"}
-              </p>
-              <p className="text-xs text-sidebar-foreground/60">
-                Negocio activo
-              </p>
-            </div>
-          )}
-        </button>
-      </div>
-
-      {/* Navigation - con gating */}
-      <nav ...>
-        {menuItems.map((item) => {
-          const isActive = location.pathname === item.path;
-          const isModuleEnabled = !item.moduleKey || enabledModules.includes(item.moduleKey);
-
-          if (!isModuleEnabled) {
-            return (
-              <div key={item.path} className="... locked styles" title="Mejorar plan">
-                <item.icon />
-                {isOpen && (
-                  <div className="flex items-center gap-2 flex-1">
-                    <span>{item.label}</span>
-                    <Lock className="w-3.5 h-3.5" />
-                  </div>
-                )}
-              </div>
-            );
-          }
-
-          return (
-            <Link key={item.path} ...>
-              // Código actual para items habilitados
-            </Link>
-          );
-        })}
-      </nav>
-
-      {/* Settings & collapse - sin cambios */}
-    </motion.aside>
-  );
-};
-```
+1. Crear `LockedModulePage.tsx`
+2. Actualizar `Dashboard.tsx` con rutas placeholder
+3. Actualizar `DashboardSidebar.tsx` con fix de active + toast
 
 ---
 
-## Checklist de Validación
+## Resultado Final
 
-### Visual
-- [ ] Dashboard siempre visible (no tiene moduleKey)
-- [ ] Clientes/Productos muestran normal si están habilitados
-- [ ] Facturas/Pagos/Asesor IA aparecen bloqueados si no están habilitados
-- [ ] Items bloqueados tienen candado visible
-- [ ] Items bloqueados no son clickeables
+| Escenario | Antes | Despues |
+|-----------|-------|---------|
+| `/dashboard/clients/123` | Clientes inactivo | Clientes activo |
+| Click en item bloqueado | Nada visible | Toast con CTA |
+| Navegar a `/dashboard/invoices` | 404 | Pagina locked o "coming soon" |
+| Navegar a `/dashboard/settings` | 404 | Pagina "coming soon" |
 
-### Funcional
-- [ ] Click en item habilitado navega correctamente
-- [ ] Click en item bloqueado no hace nada
-- [ ] Nombre del negocio se muestra correctamente
-- [ ] Cambio de negocio actualiza módulos habilitados
+---
 
-### Responsivo
-- [ ] Sidebar colapsado muestra iconos con opacidad correcta
-- [ ] No hay overflow de texto en nombres largos
+## Checklist
+
+- [ ] Active state funciona con subrutas
+- [ ] Dashboard no se activa en subrutas (solo en `/dashboard` exacto)
+- [ ] Click en locked muestra toast
+- [ ] Ninguna ruta del sidebar produce 404
+- [ ] Modulos sin acceso muestran RequireModule fallback
+- [ ] Modulos con acceso pero sin implementar muestran "Proximamente"
