@@ -130,72 +130,7 @@ export function usePayments(): UsePaymentsReturn {
     runFetch(newRequestId);
   }, [runFetch]);
 
-  // Recalculate invoice status after payment
-  const recalculateInvoiceStatus = useCallback(async (invoiceId: string) => {
-    if (!activeBusinessId) return;
-
-    // Get invoice details
-    const { data: invoice, error: invoiceError } = await supabase
-      .from('invoices')
-      .select('id, total, status, due_date')
-      .eq('id', invoiceId)
-      .eq('business_id', activeBusinessId)
-      .single();
-
-    if (invoiceError || !invoice) {
-      console.error('Error fetching invoice for recalc:', invoiceError);
-      return;
-    }
-
-    // Don't touch draft or cancelled invoices
-    if (invoice.status === 'draft' || invoice.status === 'cancelled') {
-      return;
-    }
-
-    // Sum all payments for this invoice
-    const { data: invoicePayments, error: paymentsError } = await supabase
-      .from('payments')
-      .select('amount')
-      .eq('invoice_id', invoiceId)
-      .eq('business_id', activeBusinessId);
-
-    if (paymentsError) {
-      console.error('Error fetching payments for recalc:', paymentsError);
-      return;
-    }
-
-    const totalPaid = (invoicePayments || []).reduce(
-      (sum, p) => sum + Number(p.amount), 
-      0
-    );
-
-    // Determine new status
-    let newStatus: InvoiceStatus;
-    const updateData: Record<string, unknown> = {};
-
-    if (totalPaid >= Number(invoice.total)) {
-      newStatus = 'paid';
-      updateData.paid_at = new Date().toISOString();
-    } else if (invoice.due_date && new Date(invoice.due_date) < new Date()) {
-      newStatus = 'overdue';
-    } else {
-      newStatus = 'sent';
-    }
-
-    updateData.status = newStatus;
-
-    const { error: updateError } = await supabase
-      .from('invoices')
-      .update(updateData)
-      .eq('id', invoiceId)
-      .eq('business_id', activeBusinessId);
-
-    if (updateError) {
-      console.error('Error updating invoice status:', updateError);
-    }
-  }, [activeBusinessId]);
-
-  // Create payment
+  // Create payment using atomic RPC (transactional)
   const createPayment = useCallback(async (data: CreatePaymentData): Promise<boolean> => {
     if (!activeBusinessId || !user) {
       toast({
@@ -207,24 +142,20 @@ export function usePayments(): UsePaymentsReturn {
     }
 
     try {
-      const { error: paymentError } = await supabase
-        .from('payments')
-        .insert({
-          business_id: activeBusinessId,
-          invoice_id: data.invoice_id,
-          amount: data.amount,
-          payment_method: data.payment_method || null,
-          payment_date: data.payment_date,
-          notes: data.notes || null,
-          created_by: user.id,
+      // Use atomic RPC to create payment and recalculate invoice status
+      const { data: paymentId, error: rpcError } = await supabase
+        .rpc('create_payment_and_recalc_invoice', {
+          _business_id: activeBusinessId,
+          _invoice_id: data.invoice_id,
+          _amount: data.amount,
+          _payment_method: data.payment_method || null,
+          _payment_date: data.payment_date,
+          _notes: data.notes || null,
         });
 
-      if (paymentError) {
-        throw paymentError;
+      if (rpcError) {
+        throw rpcError;
       }
-
-      // Recalculate invoice status
-      await recalculateInvoiceStatus(data.invoice_id);
 
       toast({
         title: 'Pago registrado',
@@ -242,7 +173,7 @@ export function usePayments(): UsePaymentsReturn {
       });
       return false;
     }
-  }, [activeBusinessId, user, recalculateInvoiceStatus, fetchPayments, toast]);
+  }, [activeBusinessId, user, fetchPayments, toast]);
 
   // Fetch invoices available for payment (sent, overdue, or paid for additional payments)
   const fetchPayableInvoices = useCallback(async (): Promise<InvoiceForPayment[]> => {

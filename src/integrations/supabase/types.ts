@@ -673,6 +673,17 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_payment_and_recalc_invoice: {
+        Args: {
+          _amount: number
+          _business_id: string
+          _invoice_id: string
+          _notes?: string
+          _payment_date?: string
+          _payment_method?: string
+        }
+        Returns: string
+      }
       generate_invoice_number: {
         Args: { _business_id: string }
         Returns: string
