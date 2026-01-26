@@ -1,235 +1,246 @@
 
-
-# Plan Actualizado: Modulo de Clientes (MVP)
+# Plan: Modulo de Productos (MVP)
 
 ## Resumen
 
-Implementacion completa del modulo de Clientes con CRUD multi-tenant, feature gating, validaciones y UX profesional. Incorpora todos los ajustes recomendados: indices trigram para busqueda "contiene", proteccion contra race conditions, normalizacion de datos y eliminacion de delete real.
+Implementacion del modulo de Productos siguiendo exactamente el patron establecido por el modulo de Clientes: hook con proteccion de race conditions via requestIdRef, busqueda sanitizada, soft delete, y feature gating con RequireModule.
 
 ---
 
 ## Estado Actual Verificado
 
 ### Base de Datos
-- **Tabla `clients`**: Existe con campos correctos
-- **Indices actuales**: `clients_pkey` (id), `idx_clients_business` (business_id)
-- **Extension `pg_trgm`**: Disponible en Supabase (no activada aun)
-- **RLS**: Politicas configuradas correctamente
+- **Tabla `products`**: Existe con campos: id, business_id, name, description, price, unit, category, is_active, created_by, created_at, updated_at
+- **Indices actuales**: `products_pkey` (id), `idx_products_business` (business_id)
+- **Extension `pg_trgm`**: Ya activada (v1.6)
+- **Indices faltantes**: trigram para name/category, compuesto (business_id, is_active)
 
 ### Frontend
-- **Patron de naming**: Paginas sin sufijo (`Auth.tsx`, `Dashboard.tsx`)
-- **Componentes dashboard**: En `src/components/dashboard/`
-- **Tipos**: `Client` interface disponible en `src/types/database.ts`
+- **Patron establecido**: useClients con requestIdRef, sanitizeSearchTerm, normalizeData
+- **Componentes existentes**: ClientsHeader, ClientsTable, ClientFormDialog
+- **Tipo Product**: Ya definido en types/database.ts
 
 ---
 
 ## Arquitectura del Modulo
 
 ```text
-/dashboard/clients
+/dashboard/products
     |
-    +-- Clients.tsx (contenedor principal)
+    +-- Products.tsx (contenedor principal)
          |
-         +-- ClientsHeader.tsx (titulo, busqueda, filtros)
-         +-- ClientsTable.tsx (listado con acciones)
-         +-- ClientFormDialog.tsx (modal crear/editar)
+         +-- ProductsHeader.tsx (titulo, busqueda debounced, filtros)
+         +-- ProductsTable.tsx (listado con acciones)
+         +-- ProductFormDialog.tsx (modal crear/editar)
          |
-         +-- useClients.ts (hook para CRUD)
+         +-- useProducts.ts (hook CRUD)
 ```
 
 ---
 
 ## Fase 1: Base de Datos
 
-### 1.1 Activar pg_trgm e Indices Optimizados
+### 1.1 Indices Optimizados para Productos
 
 ```sql
--- Activar extension para busqueda "contiene"
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-
--- Indice compuesto para filtrado por estado (B-tree)
-CREATE INDEX IF NOT EXISTS idx_clients_business_active 
-ON public.clients(business_id, is_active);
+-- Indice compuesto para filtrado por estado
+CREATE INDEX IF NOT EXISTS idx_products_business_active 
+ON public.products(business_id, is_active);
 
 -- Indices GIN para busqueda fuzzy con trigram
-CREATE INDEX IF NOT EXISTS idx_clients_name_trgm
-ON public.clients USING gin (name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_products_name_trgm
+ON public.products USING gin (name gin_trgm_ops);
 
-CREATE INDEX IF NOT EXISTS idx_clients_email_trgm
-ON public.clients USING gin (email gin_trgm_ops);
-
-CREATE INDEX IF NOT EXISTS idx_clients_phone_trgm
-ON public.clients USING gin (phone gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_products_category_trgm
+ON public.products USING gin (category gin_trgm_ops);
 ```
 
-Estos indices permiten busquedas `ilike '%term%'` eficientes.
+Nota: pg_trgm ya esta activo, no necesita activarse.
 
 ---
 
-## Fase 2: Hook de Clientes
+## Fase 2: Hook de Productos
 
-### Archivo: `src/hooks/useClients.ts`
+### Archivo: `src/hooks/useProducts.ts`
 
-**Caracteristicas clave:**
+**Estructura identica a useClients:**
 
-1. **Proteccion contra race conditions**: Usa `AbortController` o flag `cancelled` para evitar que respuestas tardias de queries anteriores contaminen el estado al cambiar de negocio.
-
-2. **Query de busqueda optimizada**: Usa `.or()` de Supabase manteniendo el scope:
-   ```typescript
-   query
-     .eq('business_id', activeBusinessId)
-     .or(`name.ilike.%${term}%,email.ilike.%${term}%,phone.ilike.%${term}%`)
-   ```
-
-3. **Sin delete real**: Solo expone `toggleClientStatus`, nunca `deleteClient`.
-
-4. **Normalizacion al guardar**:
-   - `phone`: elimina espacios y guiones
-   - `email`: trim y lowercase
-
-**Estructura del hook:**
 ```typescript
-interface UseClientsReturn {
-  clients: Client[];
+interface ProductFormData {
+  name: string;
+  description?: string;
+  price: number;
+  unit?: string;
+  category?: string;
+}
+
+interface UseProductsReturn {
+  products: Product[];
   isLoading: boolean;
   error: Error | null;
   searchTerm: string;
   setSearchTerm: (term: string) => void;
   showInactive: boolean;
   setShowInactive: (show: boolean) => void;
-  fetchClients: () => Promise<void>;
-  createClient: (data: ClientFormData) => Promise<boolean>;
-  updateClient: (id: string, data: ClientFormData) => Promise<boolean>;
-  toggleClientStatus: (id: string, currentStatus: boolean) => Promise<boolean>;
+  fetchProducts: () => Promise<void>;
+  createProduct: (data: ProductFormData) => Promise<boolean>;
+  updateProduct: (id: string, data: ProductFormData) => Promise<boolean>;
+  toggleProductStatus: (id: string, currentStatus: boolean) => Promise<boolean>;
+  // NO deleteProduct - solo soft delete via toggleProductStatus
 }
 ```
 
-**Implementacion de proteccion race condition:**
+**Caracteristicas clave:**
+
+1. **requestIdRef**: Contador incremental para ignorar respuestas viejas
+2. **runFetch(requestId)**: Funcion unica de fetch, usada por effect y fetchProducts
+3. **sanitizeSearchTerm**: Reutiliza la misma logica que clients (reemplaza , () ; por espacios)
+4. **normalizeProductData**: trim en strings, asegura price es number
+5. **Query de busqueda**: `.or('name.ilike.%term%,category.ilike.%term%')`
+
+**Normalizacion de datos:**
 ```typescript
-useEffect(() => {
-  let cancelled = false;
-  
-  const load = async () => {
-    const { data } = await query...;
-    if (!cancelled) {
-      setClients(data);
-    }
+function normalizeProductData(data: ProductFormData): ProductFormData {
+  return {
+    name: data.name.trim(),
+    description: data.description?.trim() || undefined,
+    price: Number(data.price),
+    unit: data.unit?.trim() || undefined,
+    category: data.category?.trim() || undefined,
   };
-  
-  load();
-  return () => { cancelled = true; };
-}, [activeBusinessId, searchTerm, showInactive]);
+}
 ```
 
 ---
 
 ## Fase 3: Componentes
 
-### 3.1 Clients.tsx (Pagina Principal)
+### 3.1 ProductsHeader.tsx
 
-**Ruta:** `/dashboard/clients`
-
-**Estructura:**
-```text
-RequireModule module="clients"
-  |
-  +-- div.space-y-6
-       |
-       +-- ClientsHeader
-       +-- ClientsTable
-       +-- ClientFormDialog
-```
-
-### 3.2 ClientsHeader.tsx
+**Props:**
+- searchTerm, onSearchChange
+- showInactive, onShowInactiveChange
+- onNewProduct
 
 **UI:**
-- Titulo "Clientes" con descripcion
-- Input de busqueda (debounced 300ms)
+- Titulo "Productos" con descripcion
+- Input de busqueda con debounce 300ms (identico a ClientsHeader)
 - Switch "Mostrar inactivos"
-- Boton "Nuevo cliente"
+- Boton "Nuevo producto"
 
-### 3.3 ClientsTable.tsx
+### 3.2 ProductsTable.tsx
 
 **Columnas:**
 | Columna | Contenido |
 |---------|-----------|
 | Nombre | name |
-| Email | email (o "-") |
-| Telefono | phone (o "-") |
-| Empresa | company (o "-") |
+| Categoria | category (o "-") |
+| Precio | price formateado con currency |
+| Unidad | unit (o "-") |
 | Estado | Badge Activo/Inactivo |
 | Acciones | Menu dropdown |
 
-**Acciones por fila (NO incluye Eliminar):**
+**Acciones (NO incluye Eliminar):**
 - Editar
 - Desactivar (si activo)
 - Reactivar (si inactivo)
 
 **Estados UI:**
 - Loading: 5 skeleton rows
-- Vacio: Ilustracion + CTA
+- Vacio: Ilustracion con icono Package + CTA
 - Sin resultados: Mensaje claro
 
-### 3.4 ClientFormDialog.tsx
+**Formateo de precio:**
+```typescript
+// Usar Intl.NumberFormat para moneda
+const formatPrice = (price: number) => {
+  return new Intl.NumberFormat('es-MX', {
+    style: 'currency',
+    currency: 'MXN',
+  }).format(price);
+};
+```
 
-**Campos con normalizacion:**
-| Campo | Tipo | Validacion | Normalizacion |
-|-------|------|------------|---------------|
-| name | text | min 2 chars | trim |
-| email | email | formato valido | trim + lowercase |
-| phone | tel | opcional | elimina espacios/guiones |
-| company | text | opcional | trim |
-| notes | textarea | opcional | trim |
+### 3.3 ProductFormDialog.tsx
+
+**Campos con validacion Zod:**
+
+| Campo | Tipo | Requerido | Validacion |
+|-------|------|-----------|------------|
+| name | text | Si | min 2 caracteres |
+| price | number | Si | >= 0 |
+| category | text | No | trim |
+| unit | text | No | trim |
+| description | textarea | No | trim |
 
 **Schema Zod:**
 ```typescript
-const clientSchema = z.object({
+const productSchema = z.object({
   name: z.string()
-    .trim()
+    .min(1, 'El nombre es requerido')
     .min(2, 'El nombre debe tener al menos 2 caracteres'),
-  email: z.string()
-    .trim()
-    .toLowerCase()
-    .email('Email invalido')
-    .optional()
-    .or(z.literal('')),
-  phone: z.string()
-    .transform(v => v?.replace(/[\s\-]/g, ''))
-    .optional(),
-  company: z.string().trim().optional(),
-  notes: z.string().trim().optional(),
+  price: z.coerce.number()
+    .min(0, 'El precio debe ser mayor o igual a 0'),
+  category: z.string().optional(),
+  unit: z.string().optional(),
+  description: z.string().optional(),
 });
 ```
 
 ---
 
-## Fase 4: Integracion
+## Fase 4: Pagina Principal
 
-### 4.1 Dashboard.tsx
+### Archivo: `src/pages/dashboard/Products.tsx`
+
+**Estructura identica a Clients.tsx:**
 
 ```tsx
-<Routes>
-  <Route index element={<DashboardOverview />} />
-  <Route path="clients" element={<Clients />} />
-</Routes>
+export default function Products() {
+  const {
+    products,
+    isLoading,
+    searchTerm,
+    setSearchTerm,
+    showInactive,
+    setShowInactive,
+    createProduct,
+    updateProduct,
+    toggleProductStatus,
+  } = useProducts();
+
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Handlers identicos al patron de Clients...
+
+  return (
+    <RequireModule module="products">
+      <div className="space-y-6">
+        <ProductsHeader ... />
+        <ProductsTable ... />
+        <ProductFormDialog ... />
+      </div>
+    </RequireModule>
+  );
+}
 ```
 
 ---
 
-## Fase 5: UX y Estados
+## Fase 5: Routing
 
-### Toasts de Feedback
+### Modificar Dashboard.tsx
 
-| Accion | Exito | Error |
-|--------|-------|-------|
-| Crear | "Cliente creado" | "Error al crear cliente" |
-| Editar | "Cliente actualizado" | "Error al actualizar" |
-| Desactivar | "Cliente desactivado" | "Error al desactivar" |
-| Reactivar | "Cliente reactivado" | "Error al reactivar" |
+Agregar import y ruta:
 
-### Debounce en Busqueda
+```tsx
+import Products from "@/pages/dashboard/Products";
 
-300ms de delay para evitar queries excesivas mientras el usuario escribe.
+// En Routes:
+<Route path="products/*" element={<Products />} />
+```
 
 ---
 
@@ -239,18 +250,29 @@ const clientSchema = z.object({
 
 | Archivo | Descripcion |
 |---------|-------------|
-| `src/hooks/useClients.ts` | Hook CRUD con proteccion race condition |
-| `src/pages/dashboard/Clients.tsx` | Pagina principal modulo |
-| `src/components/clients/ClientsHeader.tsx` | Header con busqueda |
-| `src/components/clients/ClientsTable.tsx` | Tabla sin boton delete |
-| `src/components/clients/ClientFormDialog.tsx` | Modal con normalizacion |
-| `supabase/migrations/XXXX_clients_trigram_indexes.sql` | Extension + indices |
+| `src/hooks/useProducts.ts` | Hook CRUD con requestIdRef |
+| `src/pages/dashboard/Products.tsx` | Pagina principal modulo |
+| `src/components/products/ProductsHeader.tsx` | Header con busqueda debounced |
+| `src/components/products/ProductsTable.tsx` | Tabla sin delete |
+| `src/components/products/ProductFormDialog.tsx` | Modal con validacion Zod |
+| `supabase/migrations/XXXX_products_indexes.sql` | Indices trigram y compuesto |
 
 ### Archivos a modificar
 
 | Archivo | Cambio |
 |---------|--------|
-| `src/pages/Dashboard.tsx` | Agregar ruta /clients |
+| `src/pages/Dashboard.tsx` | Agregar ruta /products |
+
+---
+
+## UX y Toasts
+
+| Accion | Exito | Error |
+|--------|-------|-------|
+| Crear | "Producto creado" | "Error al crear producto" |
+| Editar | "Producto actualizado" | "Error al actualizar" |
+| Desactivar | "Producto desactivado" | "Error al desactivar" |
+| Reactivar | "Producto reactivado" | "Error al reactivar" |
 
 ---
 
@@ -258,22 +280,22 @@ const clientSchema = z.object({
 
 1. **Multi-tenant**: Todas las queries con `business_id = activeBusinessId`
 2. **RLS**: Base de datos valida membresia via `is_member_of_business()`
-3. **Feature gating**: `RequireModule` bloquea acceso si modulo no habilitado
-4. **Race condition**: Flag `cancelled` en useEffect previene estados inconsistentes
-5. **Sin delete real**: Solo soft delete via `toggleClientStatus`
-6. **Validacion + Normalizacion**: Zod procesa inputs antes de enviar
+3. **Feature gating**: `RequireModule module="products"` bloquea acceso
+4. **Race condition**: requestIdRef previene estados inconsistentes
+5. **Sin delete real**: Solo soft delete via `toggleProductStatus`
+6. **Validacion**: Zod valida inputs antes de enviar
 7. **created_by**: Asignado automaticamente desde `user.id`
 
 ---
 
 ## Orden de Implementacion
 
-1. Migracion SQL (pg_trgm + indices)
-2. Hook useClients con proteccion race condition
-3. ClientFormDialog con normalizacion Zod
-4. ClientsTable sin opcion delete
-5. ClientsHeader con debounce
-6. Clients.tsx (pagina contenedora)
+1. Migracion SQL (indices trigram y compuesto)
+2. Hook useProducts
+3. ProductFormDialog
+4. ProductsTable
+5. ProductsHeader
+6. Products.tsx (pagina)
 7. Actualizar Dashboard.tsx con ruta
 8. Testing manual
 
@@ -282,19 +304,14 @@ const clientSchema = z.object({
 ## Checklist Post-Implementacion
 
 ### Funcional
-- [ ] Crear cliente con nombre minimo
-- [ ] Editar cliente y ver cambios
-- [ ] Desactivar cliente (is_active = false)
-- [ ] Reactivar cliente inactivo
-- [ ] Toggle mostrar/ocultar inactivos
-- [ ] Busqueda por nombre/email/telefono funciona con "contiene"
+- [ ] Listado carga por negocio activo
+- [ ] No mezcla datos al cambiar de negocio (race condition)
+- [ ] Busqueda "contiene" funciona en name/category
+- [ ] Crear producto con validacion
+- [ ] Editar producto
+- [ ] Desactivar/reactivar respeta toggle "Mostrar inactivos"
+- [ ] No hay boton/funcion de eliminar permanente
 
 ### Seguridad
-- [ ] No muestra nada si activeBusinessId es null
 - [ ] Queries incluyen .eq('business_id', activeBusinessId)
-- [ ] No existe boton/funcion de eliminar permanente
-- [ ] Cambiar de negocio no mezcla datos (race condition protegida)
-
-### Gating
-- [ ] RequireModule bloquea si modulo no habilitado
-
+- [ ] Sin modulo products → bloqueo correcto por RequireModule
