@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { Routes, Route } from "react-router-dom";
 import { motion } from "framer-motion";
-import { FileText, CreditCard, MessageSquare, Settings } from "lucide-react";
+import { CreditCard, MessageSquare, Settings } from "lucide-react";
 import { useBusiness } from "@/contexts/BusinessContext";
 import { DashboardSidebar } from "@/components/dashboard/DashboardSidebar";
 import { DashboardHeader } from "@/components/dashboard/DashboardHeader";
 import { DashboardOverview } from "@/components/dashboard/DashboardOverview";
 import Clients from "@/pages/dashboard/Clients";
 import Products from "@/pages/dashboard/Products";
+import Invoices from "@/pages/dashboard/Invoices";
 import LockedModulePage from "@/pages/dashboard/LockedModulePage";
 
 const SettingsPlaceholder = () => (
@@ -43,9 +44,7 @@ const Dashboard = () => {
               <Route index element={<DashboardOverview />} />
               <Route path="clients/*" element={<Clients />} />
               <Route path="products/*" element={<Products />} />
-              <Route path="invoices/*" element={
-                <LockedModulePage moduleName="Facturación" moduleKey="invoicing" icon={FileText} />
-              } />
+              <Route path="invoices/*" element={<Invoices />} />
               <Route path="payments/*" element={
                 <LockedModulePage moduleName="Pagos" moduleKey="payments" icon={CreditCard} />
               } />
