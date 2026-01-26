@@ -5,6 +5,7 @@ import { useBusiness } from "@/contexts/BusinessContext";
 import { DashboardSidebar } from "@/components/dashboard/DashboardSidebar";
 import { DashboardHeader } from "@/components/dashboard/DashboardHeader";
 import { DashboardOverview } from "@/components/dashboard/DashboardOverview";
+import Clients from "@/pages/dashboard/Clients";
 
 const Dashboard = () => {
   const { user, activeBusiness, signOut } = useBusiness();
@@ -29,7 +30,7 @@ const Dashboard = () => {
           >
             <Routes>
               <Route index element={<DashboardOverview />} />
-              {/* More routes will be added here */}
+              <Route path="clients/*" element={<Clients />} />
             </Routes>
           </motion.div>
         </main>
