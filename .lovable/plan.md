@@ -1,279 +1,191 @@
 
-
-# Plan: Corrección de Métricas + Índices de Performance
-
-## Resumen
-
-Este plan corrige un bug crítico en las métricas del dashboard donde `pending_amount` y `overdue_amount` no descuentan pagos parciales, y añade índices para optimizar el rendimiento de las consultas.
-
----
+# Plan: Corregir Política RLS de business_members para Onboarding
 
 ## Problema Identificado
 
-### Bug Crítico en `get_dashboard_metrics`
+El usuario **puede autenticarse correctamente** (ya hay sesión activa con JWT válido), pero **no puede completar el onboarding** porque falla al crear el primer `business_member`.
 
-**Líneas 81-86 actuales:**
+### Causa Raíz
+
+La política RLS de INSERT en `business_members` tiene un bug de referencia ambigua:
+
 ```sql
--- Pending amount (sum of unpaid invoice totals)
-COALESCE((
-  SELECT SUM(i.total)
-  FROM invoices i
-  WHERE i.business_id = _business_id
-    AND i.status IN ('sent', 'overdue')
-), 0)::numeric AS pending_amount,
+-- Política actual (BUGGY)
+CREATE POLICY "Owner/Admin can insert members"
+ON public.business_members FOR INSERT
+TO authenticated
+WITH CHECK (
+  public.has_min_role(business_id, 'admin')
+  OR NOT EXISTS (SELECT 1 FROM business_members WHERE business_id = business_members.business_id)
+);
 ```
 
-**Problema:** Si una factura de $100 tiene $90 pagados, se cuenta como $100 pendiente en lugar de $10.
+**El problema:** En el subquery, `business_members.business_id` se refiere a la fila del propio subquery, no a la fila que se está insertando. Esto crea una auto-comparación que siempre es TRUE, haciendo que `NOT EXISTS` siempre sea FALSE.
 
-**Impacto:** El dashboard muestra montos inflados, lo cual es crítico para decisiones de negocio.
+**Resultado:** La condición "permitir si es el primer miembro del negocio" nunca se cumple, bloqueando el onboarding.
 
 ---
 
-## Solución: Cálculo Correcto con CTE
+## Verificación del Diagnóstico
 
-### Nuevo SQL para `pending_amount` y `overdue_amount`
-
-```sql
--- CTE para calcular pagos por factura
-WITH invoice_payments AS (
-  SELECT 
-    invoice_id, 
-    COALESCE(SUM(amount), 0) AS total_paid
-  FROM payments
-  WHERE business_id = _business_id
-  GROUP BY invoice_id
-)
-
--- Pending amount = SUM(total - paid) para sent/overdue
-COALESCE((
-  SELECT SUM(GREATEST(i.total - COALESCE(ip.total_paid, 0), 0))
-  FROM invoices i
-  LEFT JOIN invoice_payments ip ON ip.invoice_id = i.id
-  WHERE i.business_id = _business_id
-    AND i.status IN ('sent', 'overdue')
-), 0)::numeric AS pending_amount,
-
--- Overdue amount = SUM(total - paid) para overdue
-COALESCE((
-  SELECT SUM(GREATEST(i.total - COALESCE(ip.total_paid, 0), 0))
-  FROM invoices i
-  LEFT JOIN invoice_payments ip ON ip.invoice_id = i.id
-  WHERE i.business_id = _business_id
-    AND i.status = 'overdue'
-), 0)::numeric AS overdue_amount
-```
+1. **Usuario autenticado:** ✅ Confirmado (bearer token válido en network requests)
+2. **Tablas plan/modules:** ✅ Datos correctos (trial plan existe con módulos)
+3. **Política businesses INSERT:** ✅ Funciona (`auth.uid() IS NOT NULL`)
+4. **Política business_members INSERT:** ❌ Bug - bloquea primer miembro
+5. **Base de datos:** 0 negocios, 0 business_members (nadie puede completar onboarding)
 
 ---
 
-## Fase 1: Migración SQL - Corregir RPC
+## Solución
 
-### Archivo: Nueva migración
+### Nueva migración SQL
 
-**Cambios en `get_dashboard_metrics`:**
-
-1. Agregar CTE `invoice_payments` para pre-calcular pagos por factura
-2. Modificar `pending_amount` para usar `total - paid`
-3. Modificar `overdue_amount` para usar `total - paid`
-4. Usar `GREATEST(..., 0)` para evitar valores negativos en caso de overpay
-
-**Función completa corregida:**
+Reemplazar la política de INSERT en `business_members` con una versión corregida:
 
 ```sql
-CREATE OR REPLACE FUNCTION public.get_dashboard_metrics(_business_id uuid)
-RETURNS TABLE(
-  monthly_revenue numeric,
-  prev_monthly_revenue numeric,
-  active_clients bigint,
-  prev_active_clients bigint,
-  pending_invoices bigint,
-  pending_amount numeric,
-  monthly_payments_count bigint,
-  prev_monthly_payments_count bigint,
-  overdue_invoices bigint,
-  overdue_amount numeric
-)
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path TO 'public'
-AS $$
-DECLARE
-  _start_of_month date;
-  _start_of_prev_month date;
-BEGIN
-  -- Validate membership
-  IF NOT is_member_of_business(_business_id) THEN
-    RAISE EXCEPTION 'No tienes permiso para ver métricas de este negocio';
-  END IF;
+-- 1. Eliminar política buggy
+DROP POLICY IF EXISTS "Owner/Admin can insert members" ON public.business_members;
 
-  -- Calculate date boundaries
-  _start_of_month := date_trunc('month', CURRENT_DATE)::date;
-  _start_of_prev_month := (_start_of_month - interval '1 month')::date;
-
-  RETURN QUERY
-  WITH invoice_payments AS (
-    -- Pre-calculate total paid per invoice
-    SELECT 
-      p.invoice_id,
-      COALESCE(SUM(p.amount), 0) AS total_paid
-    FROM payments p
-    WHERE p.business_id = _business_id
-    GROUP BY p.invoice_id
+-- 2. Crear política corregida
+CREATE POLICY "Owner/Admin can insert members"
+ON public.business_members FOR INSERT
+TO authenticated
+WITH CHECK (
+  -- Caso 1: Usuario ya es admin+ del negocio (puede agregar más miembros)
+  public.has_min_role(business_id, 'admin')
+  OR 
+  -- Caso 2: Es el primer miembro del negocio (fundador/owner)
+  -- Usar NEW.business_id explícitamente para comparar con registros existentes
+  NOT EXISTS (
+    SELECT 1 FROM public.business_members bm 
+    WHERE bm.business_id = business_members.business_id
   )
-  SELECT
-    -- Monthly revenue (current month payments)
-    COALESCE((
-      SELECT SUM(p.amount)
-      FROM payments p
-      WHERE p.business_id = _business_id
-        AND p.payment_date >= _start_of_month
-        AND p.payment_date < (_start_of_month + interval '1 month')::date
-    ), 0)::numeric AS monthly_revenue,
-    
-    -- Previous month revenue
-    COALESCE((
-      SELECT SUM(p.amount)
-      FROM payments p
-      WHERE p.business_id = _business_id
-        AND p.payment_date >= _start_of_prev_month
-        AND p.payment_date < _start_of_month
-    ), 0)::numeric AS prev_monthly_revenue,
-    
-    -- Active clients count
-    (
-      SELECT COUNT(*)
-      FROM clients c
-      WHERE c.business_id = _business_id
-        AND c.is_active = true
-    )::bigint AS active_clients,
-    
-    -- Clients created before this month (for change calculation)
-    (
-      SELECT COUNT(*)
-      FROM clients c
-      WHERE c.business_id = _business_id
-        AND c.is_active = true
-        AND c.created_at < _start_of_month
-    )::bigint AS prev_active_clients,
-    
-    -- Pending invoices count (sent + overdue)
-    (
-      SELECT COUNT(*)
-      FROM invoices i
-      WHERE i.business_id = _business_id
-        AND i.status IN ('sent', 'overdue')
-    )::bigint AS pending_invoices,
-    
-    -- Pending amount (total - paid, avoiding negatives from overpay)
-    COALESCE((
-      SELECT SUM(GREATEST(i.total - COALESCE(ip.total_paid, 0), 0))
-      FROM invoices i
-      LEFT JOIN invoice_payments ip ON ip.invoice_id = i.id
-      WHERE i.business_id = _business_id
-        AND i.status IN ('sent', 'overdue')
-    ), 0)::numeric AS pending_amount,
-    
-    -- Monthly payments count
-    (
-      SELECT COUNT(*)
-      FROM payments p
-      WHERE p.business_id = _business_id
-        AND p.payment_date >= _start_of_month
-        AND p.payment_date < (_start_of_month + interval '1 month')::date
-    )::bigint AS monthly_payments_count,
-    
-    -- Previous month payments count
-    (
-      SELECT COUNT(*)
-      FROM payments p
-      WHERE p.business_id = _business_id
-        AND p.payment_date >= _start_of_prev_month
-        AND p.payment_date < _start_of_month
-    )::bigint AS prev_monthly_payments_count,
-    
-    -- Overdue invoices count
-    (
-      SELECT COUNT(*)
-      FROM invoices i
-      WHERE i.business_id = _business_id
-        AND i.status = 'overdue'
-    )::bigint AS overdue_invoices,
-    
-    -- Overdue amount (total - paid, avoiding negatives)
-    COALESCE((
-      SELECT SUM(GREATEST(i.total - COALESCE(ip.total_paid, 0), 0))
-      FROM invoices i
-      LEFT JOIN invoice_payments ip ON ip.invoice_id = i.id
-      WHERE i.business_id = _business_id
-        AND i.status = 'overdue'
-    ), 0)::numeric AS overdue_amount;
-END;
-$$;
+);
 ```
 
----
+Nota: En el contexto de WITH CHECK, `business_members.business_id` se refiere al valor que se está insertando (NEW). La corrección es asignar un alias distinto (`bm`) a la tabla del subquery para evitar la ambigüedad.
 
-## Fase 2: Índices de Performance
+Sin embargo, PostgreSQL en el contexto de RLS con WITH CHECK, la referencia sin alias apunta a la fila siendo insertada. El problema real es que el alias en la query original (`business_members_1`) fue generado mal.
 
-### Índices recomendados para las consultas del dashboard
+**Solución definitiva:** Usar una referencia explícita al NEW row:
 
 ```sql
--- Índice para pagos por fecha (monthly revenue queries)
-CREATE INDEX IF NOT EXISTS idx_payments_business_date 
-ON payments(business_id, payment_date DESC);
-
--- Índice para pagos por factura (pending amount calculation)
-CREATE INDEX IF NOT EXISTS idx_payments_business_invoice 
-ON payments(business_id, invoice_id);
-
--- Índice para facturas por status (pending/overdue queries)
-CREATE INDEX IF NOT EXISTS idx_invoices_business_status 
-ON invoices(business_id, status);
-
--- Índice para clientes activos
-CREATE INDEX IF NOT EXISTS idx_clients_business_active 
-ON clients(business_id, is_active) WHERE is_active = true;
+CREATE POLICY "Owner/Admin can insert members"
+ON public.business_members FOR INSERT
+TO authenticated
+WITH CHECK (
+  public.has_min_role(business_id, 'admin')
+  OR 
+  NOT EXISTS (
+    SELECT 1 FROM public.business_members existing 
+    WHERE existing.business_id = business_id
+      AND existing.user_id IS NOT NULL  -- cualquier miembro existente
+  )
+);
 ```
 
 ---
 
-## Archivos a Crear/Modificar
+## Archivo a Crear
 
-| Archivo | Cambio |
-|---------|--------|
-| `supabase/migrations/xxx_fix_dashboard_metrics.sql` | Corrige RPC + agrega índices |
+| Archivo | Descripción |
+|---------|-------------|
+| `supabase/migrations/xxx_fix_business_members_insert_policy.sql` | Corrige política RLS |
 
 ---
 
-## Verificación de Cambio
+## Contenido de la Migración
 
-### Antes (Bug)
-```text
-Factura: $100, Pagado: $90
-pending_amount = $100 (INCORRECTO)
+```sql
+-- Fix: Corregir política de INSERT en business_members
+-- El bug era que la referencia ambigua hacía imposible insertar el primer miembro
+
+DROP POLICY IF EXISTS "Owner/Admin can insert members" ON public.business_members;
+
+CREATE POLICY "Owner/Admin can insert members"
+ON public.business_members FOR INSERT
+TO authenticated
+WITH CHECK (
+  -- Caso 1: Usuario ya es admin/owner del negocio
+  public.has_min_role(business_id, 'admin')
+  OR 
+  -- Caso 2: Es el primer miembro del negocio (no hay nadie aún)
+  -- Esto permite que el creador del negocio se agregue como owner
+  NOT EXISTS (
+    SELECT 1 
+    FROM public.business_members existing 
+    WHERE existing.business_id = business_id  -- business_id aquí es la columna del NEW row
+  )
+);
 ```
 
-### Después (Corregido)
+---
+
+## Flujo Corregido
+
 ```text
-Factura: $100, Pagado: $90
-pending_amount = $10 (CORRECTO)
+1. Usuario se registra/inicia sesión
+   -> Sesión activa ✅
+
+2. Usuario llega a /onboarding
+   -> Formulario visible ✅
+
+3. Usuario crea negocio
+   -> INSERT en businesses ✅ (política permite con auth.uid())
+   -> Retorna business.id
+
+4. Usuario se agrega como owner (CORREGIDO)
+   -> INSERT en business_members
+   -> NOT EXISTS evalúa: "¿hay alguien más en este negocio?" → FALSE
+   -> Política permite el INSERT ✅
+
+5. Resto del onboarding
+   -> subscription, business_modules, business_settings
+   -> Todas usan business_id del negocio recién creado
+
+6. Navega a /dashboard ✅
 ```
 
 ---
 
 ## Checklist de Validación
 
-- [ ] Crear factura de $100, pagar $60 → pending muestra $40
-- [ ] Pagar otros $40 → pending muestra $0, factura pasa a paid
-- [ ] Factura overdue de $200, pagar $50 → overdue_amount muestra $150
-- [ ] Overpay: factura $100, pagar $120 → pending muestra $0 (no negativo)
-- [ ] Dashboard carga sin errores
-- [ ] Performance: métricas cargan en menos de 500ms
+- [ ] Registrar nuevo usuario
+- [ ] Completar onboarding (crear negocio)
+- [ ] Verificar que el usuario es owner en business_members
+- [ ] Verificar subscription creada con plan trial
+- [ ] Verificar business_modules habilitados
+- [ ] Acceso al dashboard funciona
+- [ ] Segundo usuario puede ser invitado por owner/admin
 
 ---
 
 ## Impacto
 
-- **Corrección crítica**: Métricas financieras ahora reflejan la realidad
-- **Performance**: Índices aceleran queries para negocios con muchos datos
-- **Sin cambios en frontend**: El hook `useDashboardMetrics` ya funciona correctamente
+- **Crítico:** Sin esta corrección, ningún usuario nuevo puede usar la aplicación
+- **Bajo riesgo:** Solo modifica una política de INSERT, no afecta datos existentes
+- **Sin cambios en frontend:** El código de Onboarding.tsx ya es correcto
 
+---
+
+## Detalles Técnicos
+
+### Por qué falló la política original
+
+En PostgreSQL RLS, cuando escribes:
+
+```sql
+NOT EXISTS (SELECT 1 FROM business_members WHERE business_id = business_members.business_id)
+```
+
+El `business_members.business_id` de la derecha se resuelve al alias más cercano, que en este caso es la misma tabla del subquery. Esto crea `business_id = business_id` (auto-comparación), que siempre es TRUE (excepto NULL).
+
+### Corrección
+
+Usar un alias explícito para la tabla del subquery:
+
+```sql
+NOT EXISTS (SELECT 1 FROM business_members existing WHERE existing.business_id = business_id)
+```
+
+Aquí, `existing.business_id` es de la tabla existente, y `business_id` (sin prefijo) es la columna del NEW row que se está insertando.
