@@ -11,25 +11,37 @@ import {
   ChevronLeft,
   Zap,
   Building2,
+  Lock,
+  LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useBusiness } from "@/contexts/BusinessContext";
+import type { ModuleKey } from "@/types/database";
 
 interface DashboardSidebarProps {
   isOpen: boolean;
   onToggle: () => void;
 }
 
-const menuItems = [
+interface MenuItem {
+  icon: LucideIcon;
+  label: string;
+  path: string;
+  moduleKey?: ModuleKey;
+}
+
+const menuItems: MenuItem[] = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
-  { icon: Users, label: "Clientes", path: "/dashboard/clients" },
-  { icon: Package, label: "Productos", path: "/dashboard/products" },
-  { icon: FileText, label: "Facturas", path: "/dashboard/invoices" },
-  { icon: CreditCard, label: "Pagos", path: "/dashboard/payments" },
-  { icon: MessageSquare, label: "Asesor IA", path: "/dashboard/ai" },
+  { icon: Users, label: "Clientes", path: "/dashboard/clients", moduleKey: "clients" },
+  { icon: Package, label: "Productos", path: "/dashboard/products", moduleKey: "products" },
+  { icon: FileText, label: "Facturas", path: "/dashboard/invoices", moduleKey: "invoicing" },
+  { icon: CreditCard, label: "Pagos", path: "/dashboard/payments", moduleKey: "payments" },
+  { icon: MessageSquare, label: "Asesor IA", path: "/dashboard/ai", moduleKey: "ai_advisor" },
 ];
 
 export const DashboardSidebar = ({ isOpen, onToggle }: DashboardSidebarProps) => {
   const location = useLocation();
+  const { enabledModules, activeBusiness } = useBusiness();
 
   return (
     <motion.aside
@@ -66,9 +78,13 @@ export const DashboardSidebar = ({ isOpen, onToggle }: DashboardSidebarProps) =>
             <Building2 className="w-4 h-4 text-accent" />
           </div>
           {isOpen && (
-            <div className="flex-1 text-left">
-              <p className="text-sm font-medium truncate">Mi Negocio</p>
-              <p className="text-xs text-sidebar-foreground/60">Plan Pro</p>
+            <div className="flex-1 text-left min-w-0">
+              <p className="text-sm font-medium truncate">
+                {activeBusiness?.name || "Sin negocio"}
+              </p>
+              <p className="text-xs text-sidebar-foreground/60">
+                Negocio activo
+              </p>
             </div>
           )}
         </button>
@@ -78,6 +94,30 @@ export const DashboardSidebar = ({ isOpen, onToggle }: DashboardSidebarProps) =>
       <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
         {menuItems.map((item) => {
           const isActive = location.pathname === item.path;
+          const isModuleEnabled = !item.moduleKey || enabledModules.includes(item.moduleKey);
+
+          if (!isModuleEnabled) {
+            return (
+              <div
+                key={item.path}
+                className={cn(
+                  "flex items-center gap-3 px-3 py-2.5 rounded-xl",
+                  "text-sidebar-foreground/40 cursor-not-allowed",
+                  !isOpen && "justify-center"
+                )}
+                title="Mejorar plan para acceder"
+              >
+                <item.icon className="w-5 h-5 flex-shrink-0" />
+                {isOpen && (
+                  <div className="flex items-center gap-2 flex-1">
+                    <span className="text-sm font-medium">{item.label}</span>
+                    <Lock className="w-3.5 h-3.5" />
+                  </div>
+                )}
+              </div>
+            );
+          }
+
           return (
             <Link
               key={item.path}
