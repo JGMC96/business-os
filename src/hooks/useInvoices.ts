@@ -232,8 +232,12 @@ export function useInvoices(): UseInvoicesReturn {
         .insert(itemsToInsert);
 
       if (itemsError) {
-        // Try to clean up the invoice if items failed
-        await supabase.from('invoices').delete().eq('id', invoice.id);
+        // Mark invoice as cancelled instead of deleting (soft delete pattern)
+        await supabase
+          .from('invoices')
+          .update({ status: 'cancelled' as InvoiceStatus })
+          .eq('id', invoice.id)
+          .eq('business_id', activeBusinessId);
         throw itemsError;
       }
 
