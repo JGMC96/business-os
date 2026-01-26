@@ -1,87 +1,100 @@
 
-# Plan: Corregir Política RLS de business_members para Onboarding
+
+# Plan: Corregir Política SELECT en businesses para Onboarding
 
 ## Problema Identificado
 
-El usuario **puede autenticarse correctamente** (ya hay sesión activa con JWT válido), pero **no puede completar el onboarding** porque falla al crear el primer `business_member`.
+### Error
+```
+new row violates row-level security policy for table "businesses"
+```
 
 ### Causa Raíz
 
-La política RLS de INSERT en `business_members` tiene un bug de referencia ambigua:
+El problema **NO está en la política INSERT**, que funciona correctamente (`auth.uid() IS NOT NULL`).
 
-```sql
--- Política actual (BUGGY)
-CREATE POLICY "Owner/Admin can insert members"
-ON public.business_members FOR INSERT
-TO authenticated
-WITH CHECK (
-  public.has_min_role(business_id, 'admin')
-  OR NOT EXISTS (SELECT 1 FROM business_members WHERE business_id = business_members.business_id)
-);
+El problema está en la **cadena de operaciones** del frontend:
+```javascript
+await supabase
+  .from('businesses')
+  .insert({ name, slug, industry })
+  .select()   // ← AQUÍ FALLA
+  .single();
 ```
 
-**El problema:** En el subquery, `business_members.business_id` se refiere a la fila del propio subquery, no a la fila que se está insertando. Esto crea una auto-comparación que siempre es TRUE, haciendo que `NOT EXISTS` siempre sea FALSE.
+Cuando Supabase ejecuta `.insert(...).select()`, necesita:
+1. ✅ Pasar la política INSERT (`auth.uid() IS NOT NULL`) - **OK**
+2. ❌ Pasar la política SELECT (`is_member_of_business(id)`) - **FALLA**
 
-**Resultado:** La condición "permitir si es el primer miembro del negocio" nunca se cumple, bloqueando el onboarding.
+**El usuario NO es miembro del negocio todavía** porque la inserción en `business_members` ocurre DESPUÉS. Por lo tanto, `is_member_of_business(id)` retorna FALSE y la operación completa falla.
 
 ---
 
-## Verificación del Diagnóstico
+## Flujo Actual (Fallido)
 
-1. **Usuario autenticado:** ✅ Confirmado (bearer token válido en network requests)
-2. **Tablas plan/modules:** ✅ Datos correctos (trial plan existe con módulos)
-3. **Política businesses INSERT:** ✅ Funciona (`auth.uid() IS NOT NULL`)
-4. **Política business_members INSERT:** ❌ Bug - bloquea primer miembro
-5. **Base de datos:** 0 negocios, 0 business_members (nadie puede completar onboarding)
+```text
+1. Usuario crea negocio
+   -> INSERT businesses ✅ (pasa la política INSERT)
+   -> SELECT para retornar datos ❌ (is_member_of_business = FALSE)
+   -> Operación completa falla con RLS error
+
+2. business_members nunca se inserta (porque el paso 1 falló)
+```
 
 ---
 
 ## Solución
 
-### Nueva migración SQL
+Modificar la política SELECT de `businesses` para incluir un caso especial: **permitir SELECT de negocios que no tienen ningún miembro todavía** (recién creados).
 
-Reemplazar la política de INSERT en `business_members` con una versión corregida:
+### Nueva Política SELECT
 
 ```sql
--- 1. Eliminar política buggy
-DROP POLICY IF EXISTS "Owner/Admin can insert members" ON public.business_members;
+DROP POLICY IF EXISTS "Members can view their businesses" ON public.businesses;
 
--- 2. Crear política corregida
-CREATE POLICY "Owner/Admin can insert members"
-ON public.business_members FOR INSERT
+CREATE POLICY "Members can view their businesses"
+ON public.businesses FOR SELECT
 TO authenticated
-WITH CHECK (
-  -- Caso 1: Usuario ya es admin+ del negocio (puede agregar más miembros)
-  public.has_min_role(business_id, 'admin')
-  OR 
-  -- Caso 2: Es el primer miembro del negocio (fundador/owner)
-  -- Usar NEW.business_id explícitamente para comparar con registros existentes
+USING (
+  -- Caso 1: Usuario es miembro del negocio
+  is_member_of_business(id)
+  OR
+  -- Caso 2: Negocio recién creado (sin miembros aún)
+  -- Esto permite que el INSERT...SELECT funcione durante onboarding
   NOT EXISTS (
     SELECT 1 FROM public.business_members bm 
-    WHERE bm.business_id = business_members.business_id
+    WHERE bm.business_id = id
   )
 );
 ```
 
-Nota: En el contexto de WITH CHECK, `business_members.business_id` se refiere al valor que se está insertando (NEW). La corrección es asignar un alias distinto (`bm`) a la tabla del subquery para evitar la ambigüedad.
+### Por qué es seguro
 
-Sin embargo, PostgreSQL en el contexto de RLS con WITH CHECK, la referencia sin alias apunta a la fila siendo insertada. El problema real es que el alias en la query original (`business_members_1`) fue generado mal.
+1. **Negocios existentes**: Solo visibles para sus miembros (como antes)
+2. **Negocios nuevos (0 miembros)**: Visibles temporalmente para cualquier usuario autenticado
+3. **Ventana de exposición mínima**: Solo entre el INSERT del negocio y el INSERT del primer miembro (milisegundos)
+4. **No hay datos sensibles**: Un negocio recién creado solo tiene name/slug/industry
+5. **El primer miembro se agrega inmediatamente**: El onboarding lo hace en la siguiente línea
 
-**Solución definitiva:** Usar una referencia explícita al NEW row:
+---
 
-```sql
-CREATE POLICY "Owner/Admin can insert members"
-ON public.business_members FOR INSERT
-TO authenticated
-WITH CHECK (
-  public.has_min_role(business_id, 'admin')
-  OR 
-  NOT EXISTS (
-    SELECT 1 FROM public.business_members existing 
-    WHERE existing.business_id = business_id
-      AND existing.user_id IS NOT NULL  -- cualquier miembro existente
-  )
-);
+## Flujo Corregido
+
+```text
+1. Usuario crea negocio
+   -> INSERT businesses ✅ (auth.uid() IS NOT NULL)
+   -> SELECT businesses ✅ (NOT EXISTS members = TRUE para negocio nuevo)
+   -> Retorna business.id
+
+2. Usuario se agrega como owner
+   -> INSERT business_members ✅ (NOT EXISTS = TRUE, es primer miembro)
+   -> Ahora is_member_of_business = TRUE
+
+3. Resto del onboarding
+   -> subscription, business_modules, business_settings
+   -> Todas pasan porque ya es miembro
+
+4. Navega a /dashboard ✅
 ```
 
 ---
@@ -90,61 +103,56 @@ WITH CHECK (
 
 | Archivo | Descripción |
 |---------|-------------|
-| `supabase/migrations/xxx_fix_business_members_insert_policy.sql` | Corrige política RLS |
+| `supabase/migrations/xxx_fix_businesses_select_policy.sql` | Corrige política SELECT |
 
 ---
 
 ## Contenido de la Migración
 
 ```sql
--- Fix: Corregir política de INSERT en business_members
--- El bug era que la referencia ambigua hacía imposible insertar el primer miembro
+-- Fix: Permitir SELECT de negocios recién creados (sin miembros aún)
+-- Esto permite que el flujo INSERT...SELECT del onboarding funcione
 
-DROP POLICY IF EXISTS "Owner/Admin can insert members" ON public.business_members;
+DROP POLICY IF EXISTS "Members can view their businesses" ON public.businesses;
 
-CREATE POLICY "Owner/Admin can insert members"
-ON public.business_members FOR INSERT
+CREATE POLICY "Members can view their businesses"
+ON public.businesses FOR SELECT
 TO authenticated
-WITH CHECK (
-  -- Caso 1: Usuario ya es admin/owner del negocio
-  public.has_min_role(business_id, 'admin')
-  OR 
-  -- Caso 2: Es el primer miembro del negocio (no hay nadie aún)
-  -- Esto permite que el creador del negocio se agregue como owner
+USING (
+  -- Caso 1: Usuario es miembro activo del negocio
+  public.is_member_of_business(id)
+  OR
+  -- Caso 2: Negocio recién creado sin miembros (permite INSERT...SELECT en onboarding)
   NOT EXISTS (
-    SELECT 1 
-    FROM public.business_members existing 
-    WHERE existing.business_id = business_id  -- business_id aquí es la columna del NEW row
+    SELECT 1 FROM public.business_members bm 
+    WHERE bm.business_id = id
   )
 );
 ```
 
 ---
 
-## Flujo Corregido
+## Alternativa Considerada (No elegida)
 
-```text
-1. Usuario se registra/inicia sesión
-   -> Sesión activa ✅
+**Opción B**: Modificar el frontend para NO usar `.select()` después del insert y obtener el id de otra forma.
 
-2. Usuario llega a /onboarding
-   -> Formulario visible ✅
+```javascript
+// En lugar de:
+const { data: business } = await supabase
+  .from('businesses')
+  .insert({...})
+  .select()
+  .single();
 
-3. Usuario crea negocio
-   -> INSERT en businesses ✅ (política permite con auth.uid())
-   -> Retorna business.id
-
-4. Usuario se agrega como owner (CORREGIDO)
-   -> INSERT en business_members
-   -> NOT EXISTS evalúa: "¿hay alguien más en este negocio?" → FALSE
-   -> Política permite el INSERT ✅
-
-5. Resto del onboarding
-   -> subscription, business_modules, business_settings
-   -> Todas usan business_id del negocio recién creado
-
-6. Navega a /dashboard ✅
+// Usar:
+const { data: business } = await supabase
+  .from('businesses')
+  .insert({...})
+  .select('id')  // Solo id, podría fallar igual
+  .single();
 ```
+
+**Razón para NO elegirla**: El problema persiste porque `.select()` siempre necesita pasar RLS. La solución en la política es más robusta.
 
 ---
 
@@ -152,40 +160,44 @@ WITH CHECK (
 
 - [ ] Registrar nuevo usuario
 - [ ] Completar onboarding (crear negocio)
-- [ ] Verificar que el usuario es owner en business_members
-- [ ] Verificar subscription creada con plan trial
-- [ ] Verificar business_modules habilitados
-- [ ] Acceso al dashboard funciona
-- [ ] Segundo usuario puede ser invitado por owner/admin
+- [ ] Verificar que el INSERT + SELECT de businesses funciona
+- [ ] Verificar que business_members se crea correctamente
+- [ ] Verificar acceso al dashboard
+- [ ] Verificar que usuarios NO pueden ver negocios de otros (que SÍ tienen miembros)
 
 ---
 
 ## Impacto
 
-- **Crítico:** Sin esta corrección, ningún usuario nuevo puede usar la aplicación
-- **Bajo riesgo:** Solo modifica una política de INSERT, no afecta datos existentes
-- **Sin cambios en frontend:** El código de Onboarding.tsx ya es correcto
+- **Crítico**: Sin esta corrección, el onboarding falla en el primer paso
+- **Bajo riesgo**: Solo expone negocios sin miembros (estado transitorio de milisegundos)
+- **Sin cambios en frontend**: El código de Onboarding.tsx ya es correcto
+- **Retrocompatible**: No afecta negocios existentes que ya tienen miembros
 
 ---
 
 ## Detalles Técnicos
 
-### Por qué falló la política original
+### Por qué `.insert().select()` necesita política SELECT
 
-En PostgreSQL RLS, cuando escribes:
-
-```sql
-NOT EXISTS (SELECT 1 FROM business_members WHERE business_id = business_members.business_id)
+En PostgREST (el API de Supabase), cuando haces:
+```
+POST /rest/v1/businesses?select=*
 ```
 
-El `business_members.business_id` de la derecha se resuelve al alias más cercano, que en este caso es la misma tabla del subquery. Esto crea `business_id = business_id` (auto-comparación), que siempre es TRUE (excepto NULL).
-
-### Corrección
-
-Usar un alias explícito para la tabla del subquery:
-
+Internamente ejecuta:
 ```sql
-NOT EXISTS (SELECT 1 FROM business_members existing WHERE existing.business_id = business_id)
+INSERT INTO businesses (...) VALUES (...) RETURNING *
 ```
 
-Aquí, `existing.business_id` es de la tabla existente, y `business_id` (sin prefijo) es la columna del NEW row que se está insertando.
+Pero PostgREST aplica políticas RLS tanto al INSERT (WITH CHECK) como al resultado (USING de SELECT). Si el usuario no puede ver la fila, la operación falla con RLS error.
+
+### Patrón común en Supabase
+
+Este es un patrón conocido cuando:
+1. Una tabla tiene política SELECT basada en membresía
+2. La membresía se crea DESPUÉS del insert principal
+3. El frontend usa `.insert().select()` para obtener el id
+
+La solución estándar es permitir SELECT de registros "huérfanos" (sin membresías asociadas).
+
