@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useBusiness } from "@/contexts/BusinessContext";
+import { toast } from "sonner";
 import type { ModuleKey } from "@/types/database";
 
 interface DashboardSidebarProps {
@@ -93,19 +94,27 @@ export const DashboardSidebar = ({ isOpen, onToggle }: DashboardSidebarProps) =>
       {/* Navigation */}
       <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
         {menuItems.map((item) => {
-          const isActive = location.pathname === item.path;
+          const isActive = item.path === "/dashboard"
+            ? location.pathname === "/dashboard"
+            : location.pathname === item.path || location.pathname.startsWith(item.path + "/");
           const isModuleEnabled = !item.moduleKey || enabledModules.includes(item.moduleKey);
 
           if (!isModuleEnabled) {
             return (
-              <div
+              <button
                 key={item.path}
+                type="button"
+                onClick={() => toast.info("Mejora tu plan para acceder a este módulo", {
+                  action: {
+                    label: "Ver planes",
+                    onClick: () => {/* futuro: navigate to pricing */}
+                  }
+                })}
                 className={cn(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-xl",
-                  "text-sidebar-foreground/40 cursor-not-allowed",
+                  "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl",
+                  "text-sidebar-foreground/40 hover:bg-sidebar-accent/30 transition-colors",
                   !isOpen && "justify-center"
                 )}
-                title="Mejorar plan para acceder"
               >
                 <item.icon className="w-5 h-5 flex-shrink-0" />
                 {isOpen && (
@@ -114,7 +123,7 @@ export const DashboardSidebar = ({ isOpen, onToggle }: DashboardSidebarProps) =>
                     <Lock className="w-3.5 h-3.5" />
                   </div>
                 )}
-              </div>
+              </button>
             );
           }
 
