@@ -81,7 +81,18 @@ export function useRecentActivity(limit: number = 10): UseRecentActivityReturn {
         throw new Error(rpcError.message);
       }
 
-      setActivities((data as ActivityEvent[]) || []);
+      // Normalize amount from Postgres numeric (string) to JavaScript number
+      const rows = (data as any[] | null) ?? [];
+      const normalized: ActivityEvent[] = rows.map((r) => ({
+        event_type: r.event_type as ActivityEventType,
+        event_id: r.event_id,
+        title: r.title,
+        description: r.description,
+        amount: r.amount === null ? null : Number(r.amount),
+        created_at: r.created_at,
+      }));
+
+      setActivities(normalized);
     } catch (err) {
       // Ignore stale errors
       if (currentRequestId !== requestIdRef.current) return;
