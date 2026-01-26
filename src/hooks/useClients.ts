@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useBusiness } from '@/contexts/BusinessContext';
 import { useToast } from '@/hooks/use-toast';
@@ -37,6 +37,16 @@ function normalizeClientData(data: ClientFormData): ClientFormData {
   };
 }
 
+// Sanitize search term to prevent .or() parsing issues
+// Removes/replaces characters that could break Supabase filter syntax
+function sanitizeSearchTerm(term: string): string {
+  return term
+    .trim()
+    .replace(/[,()]/g, ' ') // Replace filter-breaking chars with space
+    .replace(/\s+/g, ' ')   // Collapse multiple spaces
+    .trim();
+}
+
 export function useClients(): UseClientsReturn {
   const { activeBusinessId, user } = useBusiness();
   const { toast } = useToast();
@@ -46,17 +56,20 @@ export function useClients(): UseClientsReturn {
   const [error, setError] = useState<Error | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [showInactive, setShowInactive] = useState(false);
+  
+  // Request ID counter for race condition protection
+  const requestIdRef = useRef(0);
 
-  // Fetch clients with race condition protection
-  const fetchClients = useCallback(async () => {
+  // Single unified fetch function with race condition protection
+  const runFetch = useCallback(async (requestId: number) => {
     if (!activeBusinessId) {
-      setClients([]);
-      setIsLoading(false);
+      // Only update state if this is still the current request
+      if (requestId === requestIdRef.current) {
+        setClients([]);
+        setIsLoading(false);
+      }
       return;
     }
-
-    setIsLoading(true);
-    setError(null);
 
     try {
       let query = supabase
@@ -71,82 +84,57 @@ export function useClients(): UseClientsReturn {
       }
 
       // Search filter using OR for multiple columns
-      if (searchTerm.trim()) {
-        const term = searchTerm.trim();
-        query = query.or(`name.ilike.%${term}%,email.ilike.%${term}%,phone.ilike.%${term}%`);
+      const sanitizedTerm = sanitizeSearchTerm(searchTerm);
+      if (sanitizedTerm) {
+        query = query.or(
+          `name.ilike.%${sanitizedTerm}%,email.ilike.%${sanitizedTerm}%,phone.ilike.%${sanitizedTerm}%`
+        );
       }
 
       const { data, error: fetchError } = await query;
+
+      // Only update state if this is still the current request
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
 
       if (fetchError) {
         throw fetchError;
       }
 
       setClients(data || []);
+      setError(null);
     } catch (err) {
+      // Only update state if this is still the current request
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
+      
       console.error('Error fetching clients:', err);
       setError(err instanceof Error ? err : new Error('Error al cargar clientes'));
     } finally {
-      setIsLoading(false);
+      // Only update loading state if this is still the current request
+      if (requestId === requestIdRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [activeBusinessId, searchTerm, showInactive]);
 
-  // Effect with race condition protection
+  // Public fetch function that increments request ID
+  const fetchClients = useCallback(async () => {
+    const newRequestId = ++requestIdRef.current;
+    setIsLoading(true);
+    setError(null);
+    await runFetch(newRequestId);
+  }, [runFetch]);
+
+  // Effect for initial load and dependency changes
   useEffect(() => {
-    let cancelled = false;
-
-    const load = async () => {
-      if (!activeBusinessId) {
-        setClients([]);
-        setIsLoading(false);
-        return;
-      }
-
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        let query = supabase
-          .from('clients')
-          .select('*')
-          .eq('business_id', activeBusinessId)
-          .order('name', { ascending: true });
-
-        if (!showInactive) {
-          query = query.eq('is_active', true);
-        }
-
-        if (searchTerm.trim()) {
-          const term = searchTerm.trim();
-          query = query.or(`name.ilike.%${term}%,email.ilike.%${term}%,phone.ilike.%${term}%`);
-        }
-
-        const { data, error: fetchError } = await query;
-
-        if (cancelled) return;
-
-        if (fetchError) {
-          throw fetchError;
-        }
-
-        setClients(data || []);
-      } catch (err) {
-        if (cancelled) return;
-        console.error('Error fetching clients:', err);
-        setError(err instanceof Error ? err : new Error('Error al cargar clientes'));
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    load();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeBusinessId, searchTerm, showInactive]);
+    const newRequestId = ++requestIdRef.current;
+    setIsLoading(true);
+    setError(null);
+    runFetch(newRequestId);
+  }, [runFetch]);
 
   // Create client
   const createClient = useCallback(async (data: ClientFormData): Promise<boolean> => {
@@ -244,7 +232,7 @@ export function useClients(): UseClientsReturn {
     }
   }, [activeBusinessId, fetchClients, toast]);
 
-  // Toggle client status (soft delete/reactivate)
+  // Toggle client status (soft delete/reactivate) - NO DELETE FUNCTION EXISTS
   const toggleClientStatus = useCallback(async (id: string, currentStatus: boolean): Promise<boolean> => {
     if (!activeBusinessId) {
       toast({
@@ -299,5 +287,6 @@ export function useClients(): UseClientsReturn {
     createClient,
     updateClient,
     toggleClientStatus,
+    // NOTE: No deleteClient function - only soft delete via toggleClientStatus
   };
 }
