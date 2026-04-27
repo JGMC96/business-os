@@ -47,6 +47,7 @@ const menuItems: MenuItem[] = [
 export const DashboardSidebar = ({ isOpen, onToggle }: DashboardSidebarProps) => {
   const location = useLocation();
   const { enabledModules, activeBusiness } = useBusiness();
+  const { isSuperAdmin } = useSuperAdmin();
 
   return (
     <motion.aside
