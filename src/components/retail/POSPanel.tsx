@@ -116,6 +116,7 @@ export function POSPanel() {
   };
 
   return (
+    <>
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[calc(100vh-220px)]">
       {/* Products Panel */}
       <Card className="flex flex-col">
