@@ -5,17 +5,20 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Zap, Mail, Lock, User, ArrowLeft, Loader2 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { supabase } from "@/integrations/supabase/client";
 import { lovable } from "@/integrations/lovable";
+import { setRememberSession, isRememberSession } from "@/lib/sessionPersistence";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 
 const Auth = () => {
   const [searchParams] = useSearchParams();
   const [isLogin, setIsLogin] = useState(searchParams.get("tab") !== "register");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => localStorage.getItem("tb_remembered_email") ?? "");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
+  const [rememberMe, setRememberMe] = useState(() => isRememberSession());
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
 
@@ -62,6 +65,14 @@ const Auth = () => {
 
     try {
       if (isLogin) {
+        // Aplicar preferencia de "Recordar sesión" antes del login
+        setRememberSession(rememberMe);
+        if (rememberMe) {
+          localStorage.setItem("tb_remembered_email", email);
+        } else {
+          localStorage.removeItem("tb_remembered_email");
+        }
+
         const { error } = await supabase.auth.signInWithPassword({
           email,
           password,
@@ -255,6 +266,22 @@ const Auth = () => {
                 />
               </div>
             </div>
+
+            {isLogin && (
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="rememberMe"
+                  checked={rememberMe}
+                  onCheckedChange={(checked) => setRememberMe(checked === true)}
+                />
+                <Label
+                  htmlFor="rememberMe"
+                  className="text-sm font-normal text-muted-foreground cursor-pointer select-none"
+                >
+                  Recordar sesión en este dispositivo
+                </Label>
+              </div>
+            )}
 
             <Button
               type="submit"
