@@ -85,15 +85,32 @@ export function POSPanel() {
   const handleCheckout = async () => {
     if (cart.length === 0) return;
 
-    const saleId = await createSale({
-      payment_method: selectedPayment,
-      items: cart,
-      subtotal,
-      tax,
-      total,
+    const snapshot = [...cart];
+    const snapSubtotal = subtotal;
+    const snapTax = tax;
+    const snapTotal = total;
+    const snapPayment = selectedPayment;
+
+    const result = await createSale({
+      payment_method: snapPayment,
+      items: snapshot,
+      subtotal: snapSubtotal,
+      tax: snapTax,
+      total: snapTotal,
     });
 
-    if (saleId) {
+    if (result) {
+      setTicket({
+        saleNumber: result.sale_number,
+        items: snapshot,
+        subtotal: snapSubtotal,
+        tax: snapTax,
+        taxRate,
+        total: snapTotal,
+        paymentMethod: snapPayment,
+        createdAt: new Date(),
+      });
+      setTicketOpen(true);
       clearCart();
     }
   };
