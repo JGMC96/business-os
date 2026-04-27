@@ -532,6 +532,33 @@ export type Database = {
         }
         Relationships: []
       }
+      platform_roles: {
+        Row: {
+          granted_at: string
+          granted_by: string | null
+          id: string
+          notes: string | null
+          role: Database["public"]["Enums"]["platform_role"]
+          user_id: string
+        }
+        Insert: {
+          granted_at?: string
+          granted_by?: string | null
+          id?: string
+          notes?: string | null
+          role: Database["public"]["Enums"]["platform_role"]
+          user_id: string
+        }
+        Update: {
+          granted_at?: string
+          granted_by?: string | null
+          id?: string
+          notes?: string | null
+          role?: Database["public"]["Enums"]["platform_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
       products: {
         Row: {
           business_id: string
@@ -855,10 +882,18 @@ export type Database = {
         }
         Returns: boolean
       }
+      has_platform_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["platform_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
       is_member_of_business: {
         Args: { _business_id: string }
         Returns: boolean
       }
+      is_super_admin: { Args: never; Returns: boolean }
       set_active_business: { Args: { _business_id: string }; Returns: boolean }
       show_limit: { Args: never; Returns: number }
       show_trgm: { Args: { "": string }; Returns: string[] }
@@ -873,6 +908,7 @@ export type Database = {
         | "payments"
         | "ai_advisor"
         | "reports"
+      platform_role: "super_admin" | "support"
       subscription_plan: "free" | "trial" | "pro" | "business"
       subscription_status: "active" | "cancelled" | "past_due" | "trialing"
     }
@@ -1012,6 +1048,7 @@ export const Constants = {
         "ai_advisor",
         "reports",
       ],
+      platform_role: ["super_admin", "support"],
       subscription_plan: ["free", "trial", "pro", "business"],
       subscription_status: ["active", "cancelled", "past_due", "trialing"],
     },
