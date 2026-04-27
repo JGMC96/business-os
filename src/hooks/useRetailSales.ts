@@ -144,7 +144,7 @@ export function useRetailSales() {
 
       toast.success(`Venta ${saleNumber} registrada`);
       fetchSales();
-      return sale.id;
+      return { id: sale.id, sale_number: saleNumber };
     } catch (error: any) {
       console.error('Error creating sale:', error);
       toast.error('Error al registrar venta');
