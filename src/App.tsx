@@ -12,6 +12,7 @@ import SelectBusiness from "./pages/SelectBusiness";
 import NotFound from "./pages/NotFound";
 import { RequireAuth } from "./components/auth/RequireAuth";
 import { RequireBusiness } from "./components/auth/RequireBusiness";
+import { AuthRedirector } from "./components/auth/AuthRedirector";
 
 const queryClient = new QueryClient();
 
@@ -22,6 +23,7 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <BusinessProvider>
+          <AuthRedirector />
           <Routes>
             {/* Public routes */}
             <Route path="/" element={<Index />} />
