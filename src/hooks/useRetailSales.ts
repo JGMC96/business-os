@@ -87,7 +87,7 @@ export function useRetailSales() {
     fetchSales();
   }, [fetchSales]);
 
-  const createSale = async (data: CreateSaleData): Promise<string | null> => {
+  const createSale = async (data: CreateSaleData): Promise<{ id: string; sale_number: string } | null> => {
     if (!activeBusiness?.id) {
       toast.error('No hay negocio activo');
       return null;
@@ -144,7 +144,7 @@ export function useRetailSales() {
 
       toast.success(`Venta ${saleNumber} registrada`);
       fetchSales();
-      return sale.id;
+      return { id: sale.id, sale_number: saleNumber };
     } catch (error: any) {
       console.error('Error creating sale:', error);
       toast.error('Error al registrar venta');

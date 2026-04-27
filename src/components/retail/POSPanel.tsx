@@ -9,6 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { useInventory, ProductWithStock } from '@/hooks/useInventory';
 import { useRetailSales, CartItem } from '@/hooks/useRetailSales';
 import { useBusinessSettings } from '@/hooks/useBusinessSettings';
+import { SaleTicketDialog, TicketData } from './SaleTicketDialog';
 import { cn } from '@/lib/utils';
 
 export function POSPanel() {
@@ -18,6 +19,8 @@ export function POSPanel() {
   const [searchQuery, setSearchQuery] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedPayment, setSelectedPayment] = useState<string>('cash');
+  const [ticket, setTicket] = useState<TicketData | null>(null);
+  const [ticketOpen, setTicketOpen] = useState(false);
 
   const taxRate = settings?.tax_rate ?? 16;
 
@@ -82,20 +85,38 @@ export function POSPanel() {
   const handleCheckout = async () => {
     if (cart.length === 0) return;
 
-    const saleId = await createSale({
-      payment_method: selectedPayment,
-      items: cart,
-      subtotal,
-      tax,
-      total,
+    const snapshot = [...cart];
+    const snapSubtotal = subtotal;
+    const snapTax = tax;
+    const snapTotal = total;
+    const snapPayment = selectedPayment;
+
+    const result = await createSale({
+      payment_method: snapPayment,
+      items: snapshot,
+      subtotal: snapSubtotal,
+      tax: snapTax,
+      total: snapTotal,
     });
 
-    if (saleId) {
+    if (result) {
+      setTicket({
+        saleNumber: result.sale_number,
+        items: snapshot,
+        subtotal: snapSubtotal,
+        tax: snapTax,
+        taxRate,
+        total: snapTotal,
+        paymentMethod: snapPayment,
+        createdAt: new Date(),
+      });
+      setTicketOpen(true);
       clearCart();
     }
   };
 
   return (
+    <>
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[calc(100vh-220px)]">
       {/* Products Panel */}
       <Card className="flex flex-col">
@@ -269,5 +290,7 @@ export function POSPanel() {
         </CardContent>
       </Card>
     </div>
+    <SaleTicketDialog open={ticketOpen} onOpenChange={setTicketOpen} ticket={ticket} />
+    </>
   );
 }
