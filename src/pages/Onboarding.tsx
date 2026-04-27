@@ -3,13 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { supabase } from '@/integrations/supabase/client';
 import { useBusiness } from '@/contexts/BusinessContext';
+import { useSuperAdmin } from '@/hooks/useSuperAdmin';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { Building2, Sparkles, ArrowRight, Loader2 } from 'lucide-react';
+import { Building2, Sparkles, ArrowRight, Loader2, ShieldCheck } from 'lucide-react';
 
 const INDUSTRIES = [
   { value: 'retail', label: 'Comercio / Retail' },
@@ -27,6 +28,7 @@ const INDUSTRIES = [
 export default function Onboarding() {
   const navigate = useNavigate();
   const { user, refreshBusinesses } = useBusiness();
+  const { isSuperAdmin } = useSuperAdmin();
   const [isLoading, setIsLoading] = useState(false);
   const [businessName, setBusinessName] = useState('');
   const [industry, setIndustry] = useState('');
