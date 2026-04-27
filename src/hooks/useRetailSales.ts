@@ -87,7 +87,7 @@ export function useRetailSales() {
     fetchSales();
   }, [fetchSales]);
 
-  const createSale = async (data: CreateSaleData): Promise<string | null> => {
+  const createSale = async (data: CreateSaleData): Promise<{ id: string; sale_number: string } | null> => {
     if (!activeBusiness?.id) {
       toast.error('No hay negocio activo');
       return null;
