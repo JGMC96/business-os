@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { supabase } from "@/integrations/supabase/client";
 import { lovable } from "@/integrations/lovable";
 import { setRememberSession, isRememberSession } from "@/lib/sessionPersistence";
+import { checkIsSuperAdmin } from "@/lib/superAdmin";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 
@@ -33,11 +34,18 @@ const Auth = () => {
           .eq('user_id', userId)
           .eq('is_active', true)
           .limit(1);
-        
-        if (!memberships || memberships.length === 0) {
-          navigate("/onboarding");
-        } else {
+
+        if (memberships && memberships.length > 0) {
           navigate("/dashboard");
+          return;
+        }
+
+        // Sin negocios: si es super admin, ir al panel admin
+        const isSuperAdmin = await checkIsSuperAdmin(userId);
+        if (isSuperAdmin) {
+          navigate("/admin");
+        } else {
+          navigate("/onboarding");
         }
       }, 0);
     };
