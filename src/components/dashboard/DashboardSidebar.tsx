@@ -13,10 +13,12 @@ import {
   Zap,
   Building2,
   Lock,
+  ShieldCheck,
   LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useBusiness } from "@/contexts/BusinessContext";
+import { useSuperAdmin } from "@/hooks/useSuperAdmin";
 import { toast } from "sonner";
 import type { ModuleKey } from "@/types/database";
 
@@ -158,6 +160,18 @@ export const DashboardSidebar = ({ isOpen, onToggle }: DashboardSidebarProps) =>
 
       {/* Settings & collapse */}
       <div className="p-4 border-t border-sidebar-border space-y-1">
+        {isSuperAdmin && (
+          <Link
+            to="/admin"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-xl text-amber-400 hover:bg-sidebar-accent transition-colors",
+              !isOpen && "justify-center"
+            )}
+          >
+            <ShieldCheck className="w-5 h-5 flex-shrink-0" />
+            {isOpen && <span className="text-sm font-medium">Super Admin</span>}
+          </Link>
+        )}
         <Link
           to="/dashboard/settings"
           className={cn(
