@@ -239,7 +239,7 @@ export function useInvoices(): UseInvoicesReturn {
     }
 
     try {
-      const updateData: Record<string, unknown> = { status };
+      const updateData: { status: InvoiceStatus; paid_at?: string } = { status };
       
       // If marking as paid, set paid_at
       if (status === 'paid') {
