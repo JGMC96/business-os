@@ -178,6 +178,34 @@ export default function Onboarding() {
           </p>
         </div>
 
+        {/* Super admin shortcut */}
+        {isSuperAdmin && (
+          <Card className="mb-6 border-amber-500/40 bg-amber-500/5">
+            <CardContent className="flex flex-col sm:flex-row sm:items-center gap-4 p-4">
+              <div className="flex items-start gap-3 flex-1">
+                <ShieldCheck className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-medium text-foreground text-sm">
+                    Eres Super Admin de la plataforma
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Puedes saltarte este paso y administrar todos los negocios desde el panel global.
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => navigate('/admin')}
+                className="border-amber-500/40 hover:bg-amber-500/10"
+              >
+                Ir al panel Super Admin
+                <ArrowRight className="w-4 h-4 ml-1" />
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Form Card */}
         <Card className="border-border/50 shadow-lg">
           <CardHeader>
