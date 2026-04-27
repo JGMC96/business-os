@@ -9,6 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { useInventory, ProductWithStock } from '@/hooks/useInventory';
 import { useRetailSales, CartItem } from '@/hooks/useRetailSales';
 import { useBusinessSettings } from '@/hooks/useBusinessSettings';
+import { SaleTicketDialog, TicketData } from './SaleTicketDialog';
 import { cn } from '@/lib/utils';
 
 export function POSPanel() {
@@ -18,6 +19,8 @@ export function POSPanel() {
   const [searchQuery, setSearchQuery] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedPayment, setSelectedPayment] = useState<string>('cash');
+  const [ticket, setTicket] = useState<TicketData | null>(null);
+  const [ticketOpen, setTicketOpen] = useState(false);
 
   const taxRate = settings?.tax_rate ?? 16;
 
