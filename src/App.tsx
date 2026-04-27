@@ -13,6 +13,11 @@ import NotFound from "./pages/NotFound";
 import { RequireAuth } from "./components/auth/RequireAuth";
 import { RequireBusiness } from "./components/auth/RequireBusiness";
 import { AuthRedirector } from "./components/auth/AuthRedirector";
+import AdminLayout from "./pages/admin/AdminLayout";
+import AdminOverview from "./pages/admin/AdminOverview";
+import AdminBusinesses from "./pages/admin/AdminBusinesses";
+import AdminUsers from "./pages/admin/AdminUsers";
+import AdminSubscriptions from "./pages/admin/AdminSubscriptions";
 
 const queryClient = new QueryClient();
 
@@ -49,7 +54,19 @@ const App = () => (
                 </RequireBusiness>
               </RequireAuth>
             } />
-            
+
+            {/* Super admin panel - requires auth + super_admin role (checked inside) */}
+            <Route path="/admin" element={
+              <RequireAuth>
+                <AdminLayout />
+              </RequireAuth>
+            }>
+              <Route index element={<AdminOverview />} />
+              <Route path="businesses" element={<AdminBusinesses />} />
+              <Route path="users" element={<AdminUsers />} />
+              <Route path="subscriptions" element={<AdminSubscriptions />} />
+            </Route>
+
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

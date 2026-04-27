@@ -59,7 +59,7 @@ export default function AdminSubscriptions() {
   useEffect(() => { load(); }, []);
 
   const updateField = async (id: string, patch: Record<string, string>) => {
-    const { error } = await supabase.from('subscriptions').update(patch).eq('id', id);
+    const { error } = await supabase.from('subscriptions').update(patch as never).eq('id', id);
     if (error) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
       return;
