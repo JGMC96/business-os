@@ -1,13 +1,13 @@
 import { useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { checkIsSuperAdmin } from "@/lib/superAdmin";
 
 /**
  * Global listener that redirects authenticated users away from public
- * landing/auth pages to /dashboard or /onboarding depending on whether
- * they belong to a business. Required because the OAuth broker only
- * allows the bare origin as redirect_uri, so users land on "/" after
- * Google sign-in and need to be forwarded from there.
+ * landing/auth pages to /dashboard, /onboarding or /admin depending on:
+ *  - whether they belong to a business
+ *  - whether they have the super_admin platform role
  */
 export const AuthRedirector = () => {
   const navigate = useNavigate();
@@ -28,10 +28,19 @@ export const AuthRedirector = () => {
           .eq("is_active", true)
           .limit(1);
 
-        if (!memberships || memberships.length === 0) {
-          navigate("/onboarding", { replace: true });
-        } else {
+        const hasBusiness = memberships && memberships.length > 0;
+
+        if (hasBusiness) {
           navigate("/dashboard", { replace: true });
+          return;
+        }
+
+        // Sin negocios: si es super admin, mandarlo al panel admin
+        const isSuperAdmin = await checkIsSuperAdmin(userId);
+        if (isSuperAdmin) {
+          navigate("/admin", { replace: true });
+        } else {
+          navigate("/onboarding", { replace: true });
         }
       }, 0);
     };
