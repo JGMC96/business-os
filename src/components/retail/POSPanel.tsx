@@ -290,5 +290,7 @@ export function POSPanel() {
         </CardContent>
       </Card>
     </div>
+    <SaleTicketDialog open={ticketOpen} onOpenChange={setTicketOpen} ticket={ticket} />
+    </>
   );
 }
