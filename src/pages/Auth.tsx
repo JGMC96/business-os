@@ -267,6 +267,22 @@ const Auth = () => {
               </div>
             </div>
 
+            {isLogin && (
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="rememberMe"
+                  checked={rememberMe}
+                  onCheckedChange={(checked) => setRememberMe(checked === true)}
+                />
+                <Label
+                  htmlFor="rememberMe"
+                  className="text-sm font-normal text-muted-foreground cursor-pointer select-none"
+                >
+                  Recordar sesión en este dispositivo
+                </Label>
+              </div>
+            )}
+
             <Button
               type="submit"
               className="w-full"
