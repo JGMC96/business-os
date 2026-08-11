@@ -74,15 +74,25 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Las acciones de "empuje" no deben romper el flujo local si la tienda no está vinculada.
+    const isPushAction = action === 'push-status' || action === 'push-refund';
+
     if (!connection) {
+      if (isPushAction) {
+        return json({ ok: true, skipped: 'La tienda de Shopify no está vinculada a este negocio.' });
+      }
       return json(
         { error: 'Esta tienda de Shopify todavía no está vinculada a ningún negocio.' },
         409,
       );
     }
     if (connection.business_id !== businessId) {
+      if (isPushAction) {
+        return json({ ok: true, skipped: 'La tienda de Shopify pertenece a otro negocio.' });
+      }
       return json({ error: 'Esta tienda de Shopify pertenece a otro negocio.' }, 403);
     }
+
 
 
     if (action === 'diagnose') {
