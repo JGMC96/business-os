@@ -178,18 +178,22 @@ export function useOnlineOrders() {
           (status === 'shipped' || status === 'cancelled')
         ) {
           try {
-            await pushShopifyOrderStatus({
+            const result = (await pushShopifyOrderStatus({
               businessId: activeBusinessId,
               orderId,
               status,
               trackingNumber: trackingNumber || null,
               refund: status === 'cancelled' && order.payment_status === 'paid',
-            });
-            toast.success(
-              status === 'cancelled' && order.payment_status === 'paid'
-                ? 'Pedido cancelado y reembolsado en Shopify'
-                : 'Estado sincronizado con Shopify',
-            );
+            })) as { skipped?: string } | null;
+            if (result?.skipped) {
+              toast.info(result.skipped);
+            } else {
+              toast.success(
+                status === 'cancelled' && order.payment_status === 'paid'
+                  ? 'Pedido cancelado y reembolsado en Shopify'
+                  : 'Estado sincronizado con Shopify',
+              );
+            }
           } catch (err) {
             toast.warning(
               `El pedido se actualizó en Pymova, pero no en Shopify: ${
