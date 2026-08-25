@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -253,26 +253,37 @@ const Auth = () => {
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {!isLogin && (
-              <div className="space-y-2">
-                <Label htmlFor="fullName" className="text-foreground">
-                  Nombre completo
-                </Label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input
-                    id="fullName"
-                    type="text"
-                    placeholder="Tu nombre"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    className="pl-10"
-                    required={!isLogin}
-                  />
-                </div>
-              </div>
-            )}
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <AnimatePresence initial={false}>
+              {!isLogin && (
+                <motion.div
+                  key="fullName"
+                  initial={{ height: 0, opacity: 0, marginBottom: -16 }}
+                  animate={{ height: 'auto', opacity: 1, marginBottom: 0 }}
+                  exit={{ height: 0, opacity: 0, marginBottom: -16 }}
+                  transition={{ height: { duration: 0.22, ease: [0.32, 0.72, 0, 1] }, opacity: { duration: 0.15 }, marginBottom: { duration: 0.22, ease: [0.32, 0.72, 0, 1] } }}
+                  style={{ overflow: 'hidden' }}
+                >
+                  <div className="space-y-2">
+                    <Label htmlFor="fullName" className="text-foreground">
+                      Nombre completo
+                    </Label>
+                    <div className="relative">
+                      <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        id="fullName"
+                        type="text"
+                        placeholder="Tu nombre"
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                        className="pl-10"
+                        required={!isLogin}
+                      />
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <div className="space-y-2">
               <Label htmlFor="email" className="text-foreground">
@@ -311,21 +322,32 @@ const Auth = () => {
               </div>
             </div>
 
-            {isLogin && (
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="rememberMe"
-                  checked={rememberMe}
-                  onCheckedChange={(checked) => setRememberMe(checked === true)}
-                />
-                <Label
-                  htmlFor="rememberMe"
-                  className="text-sm font-normal text-muted-foreground cursor-pointer select-none"
+            <AnimatePresence initial={false}>
+              {isLogin && (
+                <motion.div
+                  key="remember"
+                  initial={{ height: 0, opacity: 0, marginBottom: -16 }}
+                  animate={{ height: 'auto', opacity: 1, marginBottom: 0 }}
+                  exit={{ height: 0, opacity: 0, marginBottom: -16 }}
+                  transition={{ height: { duration: 0.22, ease: [0.32, 0.72, 0, 1] }, opacity: { duration: 0.15 }, marginBottom: { duration: 0.22, ease: [0.32, 0.72, 0, 1] } }}
+                  style={{ overflow: 'hidden' }}
                 >
-                  Recordar sesión en este dispositivo
-                </Label>
-              </div>
-            )}
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="rememberMe"
+                      checked={rememberMe}
+                      onCheckedChange={(checked) => setRememberMe(checked === true)}
+                    />
+                    <Label
+                      htmlFor="rememberMe"
+                      className="text-sm font-normal text-muted-foreground cursor-pointer select-none"
+                    >
+                      Recordar sesión en este dispositivo
+                    </Label>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <Button
               type="submit"
@@ -346,14 +368,25 @@ const Auth = () => {
             </Button>
           </form>
 
-          {isLogin && (
-            <p className="text-center text-sm text-muted-foreground mt-6">
-              ¿Olvidaste tu contraseña?{" "}
-              <button className="text-primary hover:underline">
-                Recuperar
-              </button>
-            </p>
-          )}
+          <AnimatePresence initial={false}>
+            {isLogin && (
+              <motion.div
+                key="recover"
+                initial={{ height: 0, opacity: 0, marginTop: 0 }}
+                animate={{ height: 'auto', opacity: 1, marginTop: 24 }}
+                exit={{ height: 0, opacity: 0, marginTop: 0 }}
+                transition={{ height: { duration: 0.22, ease: [0.32, 0.72, 0, 1] }, opacity: { duration:  0.15 }, marginTop: { duration: 0.22, ease: [0.32, 0.72, 0, 1] } }}
+                style={{ overflow: 'hidden' }}
+              >
+                <p className="text-center text-sm text-muted-foreground">
+                  ¿Olvidaste tu contraseña?{" "}
+                  <button className="text-primary hover:underline">
+                    Recuperar
+                  </button>
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Footer text */}
