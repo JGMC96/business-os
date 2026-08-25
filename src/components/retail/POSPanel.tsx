@@ -297,7 +297,7 @@ export function POSPanel() {
                     <button
                       key={product.id}
                       onClick={() => handleProductClick(product)}
-                      className="p-3 rounded-lg border bg-card hover:bg-accent/50 transition-[background-color,transform] duration-100 ease-[var(--ease-out)] active:scale-[0.98] text-left"
+                      className="p-3 rounded-lg border bg-card hover:bg-accent/50 transition-[background-color,transform] duration-100 ease-smooth active:scale-[0.98] text-left"
                     >
                       <p className="font-medium text-sm truncate">{product.name}</p>
                       <p className="text-primary font-semibold">
