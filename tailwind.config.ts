@@ -72,6 +72,11 @@ export default {
           ring: "hsl(var(--sidebar-ring))",
         },
       },
+      transitionTimingFunction: {
+        smooth: 'var(--ease-out)',
+        emphasized: 'var(--ease-in-out)',
+        drawer: 'var(--ease-drawer)',
+      },
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
