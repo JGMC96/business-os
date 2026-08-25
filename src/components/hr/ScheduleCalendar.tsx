@@ -79,7 +79,7 @@ export function ScheduleCalendar() {
                   </span>
                   <button
                     onClick={() => openFor(d)}
-                    className="opacity-0 group-hover:opacity-100 text-primary"
+                    className="text-primary opacity-100 transition-opacity duration-150 ease-[var(--ease-out)] [@media(hover:hover)_and_(pointer:fine)]:opacity-0 [@media(hover:hover)_and_(pointer:fine)]:group-hover:opacity-100 focus-visible:opacity-100"
                   >
                     <Plus className="w-3 h-3" />
                   </button>

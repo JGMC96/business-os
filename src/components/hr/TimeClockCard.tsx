@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Play, Pause, Square, Coffee, MapPin, Loader2 } from 'lucide-react';
@@ -22,6 +23,7 @@ const STATE_COLOR = {
 export function TimeClockCard() {
   const { state, dashboard, acting, clockIn, breakStart, breakEnd, clockOut } = useTimeClock();
   const [now, setNow] = useState(new Date());
+  const reduced = useReducedMotion();
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -38,13 +40,32 @@ export function TimeClockCard() {
     return `${h}:${m}:${s}`;
   })();
 
+  const stateAnim = reduced
+    ? {
+        initial: { opacity: 0 },
+        animate: { opacity: 1 },
+        exit: { opacity: 0 },
+        transition: { duration: 0.1 },
+      }
+    : {
+        initial: { opacity: 0, scale: 0.97 },
+        animate: { opacity: 1, scale: 1 },
+        exit: { opacity: 0, scale: 0.97 },
+        transition: { duration: 0.12, ease: [0.23, 1, 0.32, 1] as const },
+      };
+
   return (
     <Card className="overflow-hidden">
       <CardContent className="p-8">
         <div className="flex flex-col items-center text-center gap-4">
-          <div className={cn('text-sm font-medium uppercase tracking-wide', STATE_COLOR[state])}>
-            {STATE_LABEL[state]}
-          </div>
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div key={state} {...stateAnim}>
+              <div className={cn('text-sm font-medium uppercase tracking-wide', STATE_COLOR[state])}>
+                {STATE_LABEL[state]}
+              </div>
+            </motion.div>
+          </AnimatePresence>
+
           <div className="font-display text-6xl font-bold tabular-nums">
             {format(now, 'HH:mm:ss')}
           </div>
@@ -57,32 +78,36 @@ export function TimeClockCard() {
             </div>
           )}
 
-          <div className="flex flex-wrap gap-2 justify-center pt-4">
-            {state === 'out' && (
-              <Button size="lg" onClick={clockIn} disabled={acting} className="gap-2">
-                {acting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-                Entrada
-              </Button>
-            )}
-            {state === 'working' && (
-              <>
-                <Button size="lg" variant="outline" onClick={breakStart} disabled={acting} className="gap-2">
-                  <Coffee className="w-4 h-4" />
-                  Pausa
-                </Button>
-                <Button size="lg" variant="destructive" onClick={clockOut} disabled={acting} className="gap-2">
-                  <Square className="w-4 h-4" />
-                  Salida
-                </Button>
-              </>
-            )}
-            {state === 'on_break' && (
-              <Button size="lg" onClick={breakEnd} disabled={acting} className="gap-2">
-                <Pause className="w-4 h-4" />
-                Reanudar
-              </Button>
-            )}
-          </div>
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div key={state} {...stateAnim}>
+              <div className="flex flex-wrap gap-2 justify-center pt-4">
+                {state === 'out' && (
+                  <Button size="lg" onClick={clockIn} disabled={acting} className="gap-2">
+                    {acting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                    Entrada
+                  </Button>
+                )}
+                {state === 'working' && (
+                  <>
+                    <Button size="lg" variant="outline" onClick={breakStart} disabled={acting} className="gap-2">
+                      <Coffee className="w-4 h-4" />
+                      Pausa
+                    </Button>
+                    <Button size="lg" variant="destructive" onClick={clockOut} disabled={acting} className="gap-2">
+                      <Square className="w-4 h-4" />
+                      Salida
+                    </Button>
+                  </>
+                )}
+                {state === 'on_break' && (
+                  <Button size="lg" onClick={breakEnd} disabled={acting} className="gap-2">
+                    <Pause className="w-4 h-4" />
+                    Reanudar
+                  </Button>
+                )}
+              </div>
+            </motion.div>
+          </AnimatePresence>
 
           <p className="text-xs text-muted-foreground flex items-center gap-1 pt-2">
             <MapPin className="w-3 h-3" />
